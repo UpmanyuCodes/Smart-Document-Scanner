@@ -5,8 +5,9 @@ Streamlit. Photograph or upload pages, and the app finds each page's edges,
 flattens it, cleans it up with scanner-style filters, measures scan quality,
 extracts the text, and exports the result as a PDF, images, or text.
 
-> **Everything runs locally.** Documents are never sent to an external service,
-> and text recognition uses a locally installed Tesseract engine.
+> **No third-party services.** Images are processed by the app's own server
+> (your computer when run locally) and are never sent to an external API; text
+> recognition uses the Tesseract engine installed alongside the app.
 
 ## Using the app
 
@@ -74,11 +75,16 @@ smart-document-scanner/
    .venv\Scripts\Activate.ps1
    ```
 
-3. Install dependencies:
+3. Install dependencies (the dev file adds `pytest` on top of the app's own
+   requirements):
 
    ```powershell
-   pip install -r requirements.txt
+   pip install -r requirements-dev.txt
    ```
+
+   The app uses `opencv-python-headless`. If an older setup already has
+   `opencv-python` installed in the same environment, remove it first with
+   `pip uninstall -y opencv-python`, since both packages provide `cv2`.
 
 4. *(Optional, for text recognition)* Install the **Tesseract OCR engine**.
    `pytesseract` is only a Python wrapper — it does not include the engine or
@@ -97,6 +103,34 @@ streamlit run app.py
 Browsers only allow camera access on `localhost` or over HTTPS. To use the
 camera from a phone on the same network, serve the app over HTTPS, or use the
 **Upload** option — on most phones it can open the camera directly.
+
+## Deploy (Streamlit Community Cloud)
+
+The app needs a running Python server, so static hosts such as Netlify,
+Vercel static, or GitHub Pages cannot run it. Streamlit Community Cloud is free
+and deploys directly from this GitHub repository:
+
+1. Push the latest code to GitHub.
+2. Sign in at [share.streamlit.io](https://share.streamlit.io) with GitHub.
+3. Choose **Create app → Deploy a public app from GitHub** and set:
+   - **Repository:** `UpmanyuCodes/Smart-Document-Scanner`
+   - **Branch:** `main`
+   - **Main file path:** `app.py`
+   - **Advanced settings → Python version:** 3.12
+4. Click **Deploy**. The first build takes a few minutes.
+
+What the platform uses from the repository:
+
+| File | Purpose |
+|------|---------|
+| `requirements.txt` | Python packages (headless OpenCV for servers without a display) |
+| `packages.txt` | System packages installed with apt: the Tesseract engine and English language data, so text recognition works online |
+| `.streamlit/config.toml` | Theme, 40 MB upload limit, usage statistics off |
+
+The hosted app is served over HTTPS, so the in-app camera also works on
+phones. Uploaded pages stay in the server's memory for the browser session
+only; they are not saved to disk. Pages are stored at up to 3508 px on the
+longest side (A4 at 300 DPI) to keep memory use within free-tier limits.
 
 ## Tests
 

@@ -35,7 +35,7 @@ PREVIEW_SIZE = 900
 CARD_SIZE = 600
 TILE_SIZE = 240
 THUMB_SIZE = 180
-CACHE_LIMIT = 120
+CACHE_LIMIT = 48  # per cache, per session; keeps memory modest on shared hosts
 
 SCOPE_PAGE = "page"
 SCOPE_ALL = "all"
@@ -389,7 +389,7 @@ def decode_and_validate(data: bytes):
     array_check = validation.validate_image_array(image)
     if not array_check.ok:
         return None, array_check.message
-    return image, ""
+    return image_io.limit_resolution(image, validation.MAX_STORED_DIMENSION), ""
 
 
 def add_page(image, source: str) -> None:
@@ -781,9 +781,9 @@ def crop_panel(page, settings: EditSettings, det, wkey) -> None:
 def text_panel(page, settings: EditSettings) -> None:
     available, _, languages = ocr_status()
     if not available:
-        st.markdown('<p class="muted">Text recognition isn’t set up on this '
-                    'computer yet. Install the free Tesseract OCR engine to '
-                    'extract text from your scans.</p>', unsafe_allow_html=True)
+        st.markdown('<p class="muted">Text recognition isn’t available yet. '
+                    'It needs the free Tesseract OCR engine installed where '
+                    'the app runs.</p>', unsafe_allow_html=True)
         with st.expander("How to enable text recognition", icon=":material/help:"):
             st.markdown(
                 "1. Download the Windows installer from the "

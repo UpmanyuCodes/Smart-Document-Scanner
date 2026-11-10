@@ -45,6 +45,21 @@ def encode_image(image: np.ndarray, ext: str = ".png") -> bytes | None:
     return buffer.tobytes()
 
 
+def limit_resolution(image: np.ndarray, max_dimension: int) -> np.ndarray:
+    """Return a copy no larger than ``max_dimension`` on its longest side.
+
+    Images already within the limit are returned unchanged. Uses area
+    interpolation, which is the best choice for downscaling.
+    """
+    h, w = image.shape[:2]
+    longest = max(h, w)
+    if longest <= max_dimension:
+        return image
+    scale = max_dimension / float(longest)
+    size = (max(1, round(w * scale)), max(1, round(h * scale)))
+    return cv2.resize(image, size, interpolation=cv2.INTER_AREA)
+
+
 def bgr_to_rgb(image: np.ndarray) -> np.ndarray:
     """Convert a BGR image to RGB for display. Grayscale is passed through."""
     if image is None:

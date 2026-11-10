@@ -47,6 +47,18 @@ def test_grayscale_passthrough():
     assert image_io.bgr_to_rgb(gray).ndim == 2
 
 
+def test_limit_resolution_downscales_large_images():
+    big = np.zeros((6000, 8000, 3), dtype=np.uint8)
+    out = image_io.limit_resolution(big, 3508)
+    assert max(out.shape[:2]) == 3508
+    assert abs(out.shape[1] / out.shape[0] - 8000 / 6000) < 0.01  # aspect kept
+
+
+def test_limit_resolution_keeps_small_images_untouched():
+    small = np.zeros((300, 200, 3), dtype=np.uint8)
+    assert image_io.limit_resolution(small, 3508) is small
+
+
 def test_image_dimensions():
     color = np.zeros((30, 50, 3), dtype=np.uint8)
     assert image_io.image_dimensions(color) == (50, 30, 3)

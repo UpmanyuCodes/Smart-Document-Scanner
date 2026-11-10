@@ -19,6 +19,10 @@ SUPPORTED_EXTENSIONS = ("jpg", "jpeg", "png")
 MIN_DIMENSION = 50          # px, smaller than this is not a usable document photo
 MAX_DIMENSION = 10000       # px on the longest side, above this we warn/limit
 MAX_FILE_BYTES = 40 * 1024 * 1024  # 40 MB upload ceiling
+# Longest side kept for a stored page: A4 at 300 DPI is 2480 x 3508 px, which
+# is plenty for crisp exports and OCR while bounding memory per page
+# (a 48 MP phone photo would otherwise occupy ~144 MB as an array).
+MAX_STORED_DIMENSION = 3508
 
 
 @dataclass

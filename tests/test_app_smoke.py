@@ -4,12 +4,17 @@ They render every screen, with and without pages, and drive key interactions
 to make sure no screen raises and edits reach the stored page settings.
 """
 
+from pathlib import Path
+
 import cv2
 import numpy as np
 import pytest
 from streamlit.testing.v1 import AppTest
 
 from scanner import pipeline
+
+# Absolute path: newer Streamlit resolves relative paths against this file.
+APP_PATH = str(Path(__file__).resolve().parent.parent / "app.py")
 
 
 def _document_photo(shade=235):
@@ -21,7 +26,7 @@ def _document_photo(shade=235):
 
 
 def _app(with_pages=0, nav="scan"):
-    at = AppTest.from_file("app.py", default_timeout=60)
+    at = AppTest.from_file(APP_PATH, default_timeout=60)
     if with_pages:
         at.session_state["pages"] = [
             {"id": i + 1, "image": _document_photo(230 - i * 10), "source": "upload"}
@@ -136,7 +141,7 @@ def test_settings_from_older_app_version_are_upgraded():
             self.brightness, self.contrast, self.sharpen = 15, 1.2, 0.0
             self.filter_mode, self.bw_block_size, self.bw_c = "Grayscale", 21, 10
 
-    at = AppTest.from_file("app.py", default_timeout=60)
+    at = AppTest.from_file(APP_PATH, default_timeout=60)
     at.session_state["pages"] = [{"id": 1, "image": _document_photo(), "source": "upload"}]
     at.session_state["page_counter"] = 1
     at.session_state["edits"] = {1: OldEditSettings()}
