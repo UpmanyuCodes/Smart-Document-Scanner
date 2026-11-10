@@ -17,9 +17,10 @@ This project is being built in phases. Current state:
 | — | In-browser camera capture + multi-page document (PDF/ZIP export, reorder/delete) | ✅ Done |
 | — | Mobile-app UI (phone-width frame, app bar, segmented nav, card layout) | ✅ Done |
 | 2 | Preprocessing + automatic document detection (edges, contours, 4 corners) | ✅ Done |
-| 3 | Perspective correction + deskewing | ⏳ Planned |
-| 4 | Enhancement (brightness/contrast/CLAHE/sharpen) + noise/shadow removal | ⏳ Planned |
-| 5 | Document filters (grayscale / B&W / high contrast) | ⏳ Planned |
+| 3 | Perspective correction + deskewing | ✅ Done |
+| 4 | Enhancement (brightness/contrast/CLAHE/sharpen) | ✅ Done |
+| 5 | Document filters (grayscale / B&W / high contrast) | ✅ Done |
+| — | CamScanner-style **Edit** screen: per-page filters + adjustments, apply-to-all | ✅ Done |
 | 6 | OCR text extraction (Tesseract) | ⏳ Planned |
 | 7 | Scan quality analyzer | ⏳ Planned |
 | 8 | Full pipeline integration, visualizations, final testing | ⏳ Planned |
@@ -35,7 +36,12 @@ smart-document-scanner/
 ├── scanner/               # Image-processing modules (filled in across phases)
 │   ├── __init__.py
 │   ├── preprocessing.py   # Grayscale, blur, resize-for-detection, Canny
-│   └── detection.py       # Edges -> contours -> 4-corner document boundary
+│   ├── detection.py       # Edges -> contours -> 4-corner document boundary
+│   ├── perspective.py     # Homography / top-down flattening
+│   ├── deskew.py          # Hough-line skew estimate + rotation
+│   ├── enhancement.py     # Brightness/contrast, CLAHE, unsharp sharpen
+│   ├── filters.py         # Grayscale, global/adaptive/Otsu B&W, high contrast
+│   └── pipeline.py        # EditSettings + per-page render pipeline
 ├── utils/
 │   ├── __init__.py
 │   ├── image_io.py        # Decode / encode / format conversion
@@ -47,6 +53,9 @@ smart-document-scanner/
 │   ├── test_document.py
 │   ├── test_geometry.py
 │   ├── test_detection.py
+│   ├── test_perspective.py
+│   ├── test_filters.py
+│   ├── test_pipeline.py
 │   └── test_validation.py
 └── assets/
 ```
