@@ -14,7 +14,9 @@ This project is being built in phases. Current state:
 | Phase | Scope | Status |
 |------:|-------|--------|
 | 1 | Project foundation, image upload, validation & preview | ✅ Done |
-| 2 | Preprocessing + automatic document detection | ⏳ Planned |
+| — | In-browser camera capture + multi-page document (PDF/ZIP export, reorder/delete) | ✅ Done |
+| — | Mobile-app UI (phone-width frame, app bar, segmented nav, card layout) | ✅ Done |
+| 2 | Preprocessing + automatic document detection (edges, contours, 4 corners) | ✅ Done |
 | 3 | Perspective correction + deskewing | ⏳ Planned |
 | 4 | Enhancement (brightness/contrast/CLAHE/sharpen) + noise/shadow removal | ⏳ Planned |
 | 5 | Document filters (grayscale / B&W / high contrast) | ⏳ Planned |
@@ -31,13 +33,20 @@ smart-document-scanner/
 ├── README.md
 ├── .gitignore
 ├── scanner/               # Image-processing modules (filled in across phases)
-│   └── __init__.py
+│   ├── __init__.py
+│   ├── preprocessing.py   # Grayscale, blur, resize-for-detection, Canny
+│   └── detection.py       # Edges -> contours -> 4-corner document boundary
 ├── utils/
 │   ├── __init__.py
 │   ├── image_io.py        # Decode / encode / format conversion
+│   ├── document.py        # Multi-page PDF / ZIP assembly
+│   ├── geometry.py        # Corner ordering & quad geometry
 │   └── validation.py      # Input & parameter validation
 ├── tests/
 │   ├── test_image_io.py
+│   ├── test_document.py
+│   ├── test_geometry.py
+│   ├── test_detection.py
 │   └── test_validation.py
 └── assets/
 ```
@@ -73,8 +82,16 @@ smart-document-scanner/
 streamlit run app.py
 ```
 
-This opens the scanner in your browser. Upload a JPG, JPEG, or PNG photo of a
-document to preview it with its dimensions.
+This opens the scanner in your browser. From the sidebar you can:
+
+- **📷 Camera** — take a photo of a page with your webcam, then add it. Capture
+  pages one after another to build a multi-page document. (The browser will ask
+  for camera permission; it works over `localhost` without HTTPS.)
+- **📁 Upload** — add one or several JPG/JPEG/PNG images at once.
+
+Pages appear as a thumbnail strip you can reorder (⬆️/⬇️) or remove (🗑️). Export
+the whole document as a **PDF** or a **ZIP** of images, and inspect any single
+page in detail.
 
 ## Run the tests
 

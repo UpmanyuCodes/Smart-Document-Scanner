@@ -19,9 +19,9 @@ from utils import image_io
 def _to_pil(image: np.ndarray) -> Image.Image:
     """Convert a BGR/grayscale OpenCV array to an RGB Pillow image."""
     rgb = image_io.bgr_to_rgb(image)
-    if rgb.ndim == 2:  # grayscale -> give Pillow an L image
-        return Image.fromarray(rgb, mode="L").convert("RGB")
-    return Image.fromarray(rgb, mode="RGB")
+    if rgb.ndim == 2:  # grayscale -> promote to RGB for consistent PDF pages
+        return Image.fromarray(rgb).convert("RGB")
+    return Image.fromarray(rgb).convert("RGB")
 
 
 def images_to_pdf_bytes(images: list[np.ndarray]) -> bytes | None:
