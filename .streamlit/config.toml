@@ -1,0 +1,21 @@
+[theme]
+base = "light"
+primaryColor = "#2563EB"
+backgroundColor = "#F4F6FA"
+secondaryBackgroundColor = "#FFFFFF"
+textColor = "#0F172A"
+borderColor = "#E2E8F0"
+font = "'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, 'Helvetica Neue', Arial, sans-serif"
+baseRadius = "12px"
+buttonRadius = "12px"
+showWidgetBorder = true
+
+[client]
+toolbarMode = "minimal"
+showSidebarNavigation = false
+
+[server]
+maxUploadSize = 40
+
+[browser]
+gatherUsageStats = false

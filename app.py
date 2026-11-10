@@ -1,108 +1,270 @@
-"""Smart Document Scanner — mobile-first Streamlit interface.
+"""Smart Document Scanner — Streamlit app.
 
-A CamScanner-style, browser-based scanner designed to feel like a phone app.
-Capture pages from the camera or upload them, edit each page with scanner
-filters and adjustments (apply to one page or all), and export the edited
-multi-page document as PDF / ZIP.
+Mobile-first document scanner: capture or upload pages, edit them with
+scanner filters and adjustments (per page or across all pages), check scan
+quality, extract text, and export the document as PDF, images, or text.
 
-UI only — all image-processing lives in the ``scanner`` and ``utils`` packages.
-
-Build status:
-  Phase 1  — foundation, upload, validation, preview            (done)
-  Camera + multi-page document + mobile UI                      (done)
-  Phase 2  — preprocessing + document boundary detection        (done)
-  Phase 3  — perspective correction + deskew                    (done)
-  Phase 4  — enhancement (brightness/contrast/CLAHE/sharpen)    (done)
-  Phase 5  — scanner filters (grayscale / B&W / high contrast)  (done)
-  Phase 6+ — OCR + scan-quality score                           (planned)
+This module is presentation only; all image processing lives in ``scanner``
+and ``utils``.
 """
 
 from __future__ import annotations
 
+import dataclasses
+import re
+
+import numpy as np
 import streamlit as st
 
-from scanner import detection, pipeline, preprocessing
+from scanner import detection, ocr, pipeline, preprocessing, quality
 from scanner.pipeline import EditSettings
 from utils import document, image_io, validation
 
-st.set_page_config(page_title="Smart Document Scanner", page_icon="📄",
-                   layout="centered")
+st.set_page_config(
+    page_title="Smart Document Scanner",
+    page_icon="📄",
+    layout="centered",
+    initial_sidebar_state="collapsed",
+)
 
-PREVIEW_MAX = 700        # px, live edit preview
-THUMB_MAX = 320          # px, document gallery thumbnails
+ss = st.session_state
 
+# Render sizes (longest side, px). Previews are downscaled for speed; exports
+# are always rendered at full resolution.
+PREVIEW_SIZE = 900
+CARD_SIZE = 600
+TILE_SIZE = 240
+THUMB_SIZE = 180
+CACHE_LIMIT = 120
 
-MOBILE_CSS = """
+SCOPE_PAGE = "page"
+SCOPE_ALL = "all"
+
+NAV_LABELS = {
+    "scan": ":material/document_scanner: Scan",
+    "edit": ":material/tune: Edit",
+    "export": ":material/ios_share: Export",
+}
+
+FILTER_LABELS = {
+    pipeline.FILTER_ORIGINAL: "Original",
+    pipeline.FILTER_MAGIC: "Magic",
+    pipeline.FILTER_GRAYSCALE: "Grayscale",
+    pipeline.FILTER_BW: "B&W",
+    pipeline.FILTER_HIGH_CONTRAST: "Contrast",
+}
+
+QUALITY_COLORS = {
+    "Excellent": "#16A34A",
+    "Good": "#2563EB",
+    "Fair": "#F59E0B",
+    "Poor": "#DC2626",
+}
+
+LOGO_SVG = """<svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32"
+rx="9" fill="#2563EB"/><path d="M11 7.5h7l5.5 5.5v11.5a1.5 1.5 0 0 1-1.5 1.5H11a1.5
+1.5 0 0 1-1.5-1.5V9a1.5 1.5 0 0 1 1.5-1.5z" fill="#fff"/><path d="M18 7.5V13h5.5"
+fill="#BFD3FF"/><rect x="12.5" y="16" width="8" height="1.7" rx=".85" fill="#2563EB"/>
+<rect x="12.5" y="19.6" width="5.5" height="1.7" rx=".85" fill="#93B4F5"/></svg>"""
+
+EMPTY_SVG = """<svg viewBox="0 0 96 96" aria-hidden="true"><rect x="4" y="4" width="88"
+height="88" rx="28" fill="#EAF0FF"/><path d="M34 24h20l12 12v34a3 3 0 0 1-3 3H34a3 3 0 0
+1-3-3V27a3 3 0 0 1 3-3z" fill="#fff" stroke="#93B4F5" stroke-width="2"/><path d="M54 24v12h12"
+fill="#DCE6FF"/><rect x="37" y="45" width="20" height="3" rx="1.5" fill="#93B4F5"/><rect x="37"
+y="52" width="14" height="3" rx="1.5" fill="#C3D4FA"/><path d="M22 34v-8a4 4 0 0 1 4-4h8M74
+34v-8a4 4 0 0 0-4-4h-8M22 62v8a4 4 0 0 0 4 4h8M74 62v8a4 4 0 0 1-4 4h-8" fill="none"
+stroke="#2563EB" stroke-width="3" stroke-linecap="round"/></svg>"""
+
+APP_CSS = """
 <style>
-#MainMenu, header, footer {visibility: hidden;}
-[data-testid="stMainBlockContainer"], .block-container {
-    max-width: 460px; padding-top: 0.5rem; padding-bottom: 5rem;
+:root { --brand:#2563EB; --ink:#0F172A; --muted:#64748B; --line:#E2E8F0; }
+
+header[data-testid="stHeader"], #MainMenu, footer,
+[data-testid="stToolbar"], [data-testid="stDecoration"],
+[data-testid="stStatusWidget"] { display:none !important; }
+
+.block-container, [data-testid="stMainBlockContainer"] {
+    max-width: 480px; padding: 0.9rem 1rem 7.5rem;
 }
-.app-bar {
-    background: linear-gradient(135deg, #4f46e5 0%, #0ea5e9 100%);
-    color: #fff; border-radius: 16px; padding: 16px 18px; margin-bottom: 14px;
-    box-shadow: 0 6px 18px rgba(79,70,229,0.25);
+
+/* Top bar */
+.topbar { display:flex; align-items:center; justify-content:space-between;
+          padding: 2px 2px 4px; }
+.brand { display:flex; align-items:center; gap:10px; font-weight:700;
+         font-size:1.02rem; color:var(--ink); letter-spacing:-0.01em; }
+.brand svg { width:30px; height:30px; flex-shrink:0; }
+.pill { background:#EAF0FF; color:var(--brand); font-weight:600; font-size:0.76rem;
+        padding:4px 10px; border-radius:999px; white-space:nowrap; }
+
+/* Typography helpers (!important: Streamlit styles markdown paragraphs) */
+.screen-head { margin: 4px 0 8px; }
+.screen-title { font-size:1.45rem !important; font-weight:700; color:var(--ink);
+                letter-spacing:-0.02em; line-height:1.25; margin:0 0 2px !important; }
+.muted { color:var(--muted) !important; font-size:0.9rem !important;
+         line-height:1.45 !important; margin:0 !important; }
+.small { font-size:0.8rem !important; }
+.section-label { font-size:0.72rem !important; font-weight:700; letter-spacing:0.06em;
+                 text-transform:uppercase; color:var(--muted) !important;
+                 margin:6px 0 0 !important; }
+
+/* Swipeable horizontal strips */
+.st-key-recent, .st-key-thumbs, .st-key-filters, .st-key-carousel {
+    flex-wrap: nowrap !important; overflow-x: auto; overflow-y: hidden;
+    scroll-snap-type: x mandatory; scrollbar-width: none;
+    -webkit-overflow-scrolling: touch; padding: 5px 5px 8px;
 }
-.app-bar h1 {font-size: 1.35rem; margin: 0; color: #fff;}
-.app-bar p {margin: 2px 0 0; font-size: 0.8rem; opacity: 0.92;}
-.stButton > button, .stDownloadButton > button {
-    border-radius: 12px; font-weight: 600; padding: 0.55rem 0.5rem; min-height: 2.6rem;
+.st-key-recent::-webkit-scrollbar, .st-key-thumbs::-webkit-scrollbar,
+.st-key-filters::-webkit-scrollbar, .st-key-carousel::-webkit-scrollbar { display:none; }
+.st-key-recent > *, .st-key-thumbs > *, .st-key-filters > *, .st-key-carousel > * {
+    flex-shrink: 0 !important; scroll-snap-align: start;
 }
-[data-testid="stSegmentedControl"] {margin-bottom: 0.5rem;}
-.block-container p {line-height: 1.4;}
+.st-key-carousel > * { scroll-snap-align: center; }
+
+/* Tiles are pre-cropped to a fixed aspect in Python, so no forced heights */
+[class*="st-key-recent_"] img, [class*="st-key-thumb_"] img {
+    border-radius: 8px; border: 1px solid var(--line); background:#fff;
+}
+[class*="st-key-filt_"] img {
+    border-radius: 10px; border: 1px solid var(--line); background:#fff;
+}
+/* Selected page / filter: ring around the image, label in brand colour */
+[class*="st-key-thumb_"][class*="_sel"] img,
+[class*="st-key-filt_"][class*="_sel"] img {
+    outline: 2.5px solid var(--brand); outline-offset: 2px;
+}
+/* Whole tile is one tap target: an invisible button is stretched over it */
+[class*="st-key-thumb_"], [class*="st-key-filt_"] { position: relative; }
+[class*="st-key-thumb_"] [data-testid="stElementContainer"]:has(> [data-testid="stButton"]),
+[class*="st-key-filt_"] [data-testid="stElementContainer"]:has(> [data-testid="stButton"]) {
+    position: absolute !important; inset: 0; z-index: 3; margin: 0 !important;
+    width: 100% !important; height: 100% !important;
+}
+[class*="st-key-thumb_"] [data-testid="stButton"],
+[class*="st-key-filt_"] [data-testid="stButton"] { height: 100%; }
+[class*="st-key-thumb_"] [data-testid="stButton"] button,
+[class*="st-key-filt_"] [data-testid="stButton"] button {
+    width: 100% !important; height: 100% !important; opacity: 0; cursor: pointer;
+}
+[class*="st-key-thumb_"]:has([data-testid="stButton"] button:focus-visible) img,
+[class*="st-key-filt_"]:has([data-testid="stButton"] button:focus-visible) img {
+    outline: 2.5px dashed var(--brand); outline-offset: 2px;
+}
+.tile-label { text-align:center; font-size:0.8rem; color:var(--muted);
+              margin-top:5px; line-height:1.2; }
+[class*="_sel"] .tile-label { color: var(--brand); font-weight: 700; }
+[class*="st-key-card_"] img { border-radius: 10px; }
+.page-no { text-align:center; font-size:0.78rem !important; color:var(--muted) !important;
+           font-weight:600; margin:4px 0 0 !important; }
+
+/* Page preview stage */
+.st-key-preview { background:#E8ECF3; border-radius:18px; padding:14px; }
+.st-key-preview [data-testid="stFullScreenFrame"] {
+    display:flex; justify-content:center;
+}
+.st-key-preview img {
+    max-height: 38vh; width:auto !important; max-width:100%; margin:0 auto;
+    display:block; object-fit:contain; border-radius:8px; background:#fff;
+    box-shadow: 0 10px 28px rgba(15,23,42,0.16);
+}
+
+/* Pager */
+.pager-label { font-weight:700; color:var(--ink); font-size:1.1rem; padding-left:2px; }
+.pager-label span { color:var(--muted); font-weight:500; }
+.st-key-pager [data-testid="stPopoverButton"] > div > div:nth-child(2) { display:none; }
+
+/* Fixed bottom tab bar */
+.st-key-bottomnav {
+    position: fixed; left: 50%; bottom: 0; transform: translateX(-50%);
+    width: min(480px, 100vw); z-index: 999;
+    background: rgba(255,255,255,0.97); backdrop-filter: blur(10px);
+    border-top: 1px solid var(--line);
+    padding: 10px 14px calc(10px + env(safe-area-inset-bottom));
+    box-shadow: 0 -6px 24px rgba(15,23,42,0.06);
+}
+
+/* Empty state */
+.empty { text-align:center; padding: 30px 12px 14px; }
+.empty svg { width: 96px; height: 96px; }
+.empty h3 { margin: 14px 0 6px; font-size: 1.2rem; color: var(--ink); }
+.empty p { color: var(--muted); font-size: 0.92rem; margin: 0 auto; max-width: 300px; }
+
+/* Tips */
+.tips { background:#fff; border:1px solid var(--line); border-radius:14px;
+        padding: 12px 16px; }
+.tips h4 { margin:0 0 6px; font-size:0.9rem; color:var(--ink); }
+.tips ul { margin:0; padding-left: 1.1rem; color:var(--muted); font-size:0.86rem; }
+.tips li { margin: 3px 0; }
+
+/* Quality */
+.q-head { display:flex; align-items:center; gap:18px; }
+.ring { --p:0; --c:#2563EB; width:104px; height:104px; border-radius:50%;
+        background: conic-gradient(var(--c) calc(var(--p) * 1%), #E2E8F0 0);
+        display:grid; place-items:center; flex-shrink:0; }
+.ring-inner { width:82px; height:82px; border-radius:50%; background:#fff;
+              display:flex; flex-direction:column; align-items:center; justify-content:center; }
+.ring-inner b { font-size:1.6rem; color:var(--ink); line-height:1; }
+.ring-inner small { color:var(--muted); font-size:0.7rem; }
+.q-label { font-size:1.15rem; font-weight:700; }
+.metric { margin: 10px 0 0; }
+.metric-top { display:flex; justify-content:space-between; font-size:0.86rem; color:var(--ink); }
+.metric-top span:last-child { color:var(--muted); }
+.bar { height:8px; background:#EEF2F7; border-radius:999px; overflow:hidden; margin-top:5px; }
+.bar i { display:block; height:100%; border-radius:999px; }
 </style>
 """
 
 
-# --------------------------------------------------------------------------
-# Session state
-# --------------------------------------------------------------------------
-def _init_state() -> None:
-    st.session_state.setdefault("pages", [])
-    st.session_state.setdefault("page_counter", 0)
-    st.session_state.setdefault("camera_nonce", 0)
-    st.session_state.setdefault("upload_nonce", 0)
-    st.session_state.setdefault("detections", {})   # page_id -> DetectionResult
-    st.session_state.setdefault("edits", {})        # page_id -> EditSettings
-    st.session_state.setdefault("ed_loaded_page", None)
+# ==========================================================================
+# State
+# ==========================================================================
+def init_state() -> None:
+    defaults = {
+        "pages": [], "page_counter": 0, "camera_nonce": 0, "upload_nonce": 0,
+        "detections": {}, "edits": {}, "versions": {}, "render_cache": {},
+        "geo_cache": {}, "quality_cache": {}, "ocr_results": {}, "cur": 0,
+        "nav": "scan",
+        "scope": SCOPE_PAGE, "capture_mode": "Camera", "doc_name": "Scan",
+        "export_format": "PDF", "ocr_lang": "eng",
+    }
+    for key, value in defaults.items():
+        ss.setdefault(key, value)
 
 
-def add_page(image, name: str, source: str) -> None:
-    st.session_state["page_counter"] += 1
-    st.session_state["pages"].append(
-        {"id": st.session_state["page_counter"], "image": image,
-         "name": name, "source": source}
-    )
+def prime(widget_key: str, store_key: str) -> None:
+    """Seed a widget from a persistent store (widget state is dropped by
+    Streamlit whenever the widget isn't on screen)."""
+    if widget_key not in ss:
+        ss[widget_key] = ss[store_key]
 
 
-def remove_page(page_id: int) -> None:
-    st.session_state["pages"] = [p for p in st.session_state["pages"]
-                                 if p["id"] != page_id]
-    st.session_state["detections"].pop(page_id, None)
-    st.session_state["edits"].pop(page_id, None)
+def sync(widget_key: str, store_key: str) -> None:
+    ss[store_key] = ss[widget_key]
 
 
-def move_page(page_id: int, direction: int) -> None:
-    pages = st.session_state["pages"]
-    index = next((i for i, p in enumerate(pages) if p["id"] == page_id), None)
-    if index is None:
-        return
-    new_index = index + direction
-    if 0 <= new_index < len(pages):
-        pages[index], pages[new_index] = pages[new_index], pages[index]
+def pages() -> list:
+    return ss["pages"]
 
 
-def clear_pages() -> None:
-    st.session_state["pages"] = []
-    st.session_state["detections"] = {}
-    st.session_state["edits"] = {}
+def current_page():
+    if not pages():
+        return None
+    ss["cur"] = max(0, min(ss["cur"], len(pages()) - 1))
+    return pages()[ss["cur"]]
+
+
+def version(page_id: int) -> int:
+    return ss["versions"].get(page_id, 0)
+
+
+def bump(page_id: int) -> None:
+    """Invalidate a page's widgets so they reload from its stored settings."""
+    ss["versions"][page_id] = version(page_id) + 1
 
 
 def get_detection(page):
-    cache = st.session_state["detections"]
-    if page["id"] not in cache:
-        cache[page["id"]] = detection.detect_document_corners(page["image"])
-    return cache[page["id"]]
+    if page["id"] not in ss["detections"]:
+        ss["detections"][page["id"]] = detection.detect_document_corners(page["image"])
+    return ss["detections"][page["id"]]
 
 
 def corners_for(page):
@@ -110,22 +272,113 @@ def corners_for(page):
     return det.corners if det.success else None
 
 
-def ensure_settings(page) -> EditSettings:
-    """Return stored edit settings for a page, creating defaults on first use.
+def settings_for(page) -> EditSettings:
+    """Stored edit settings; auto-crop starts on when page edges were found."""
+    stored = ss["edits"].get(page["id"])
+    if stored is None:
+        stored = EditSettings(crop=get_detection(page).success)
+    elif not isinstance(stored, EditSettings):
+        # Settings created by an older version of the app (e.g. the session
+        # outlived a code update): carry over known fields, default the rest.
+        stored = EditSettings(**{
+            f.name: getattr(stored, f.name)
+            for f in dataclasses.fields(EditSettings) if hasattr(stored, f.name)
+        })
+    ss["edits"][page["id"]] = stored
+    return stored
 
-    Auto-crop defaults ON when a boundary was detected (CamScanner-like)."""
-    edits = st.session_state["edits"]
-    if page["id"] not in edits:
-        det = get_detection(page)
-        edits[page["id"]] = EditSettings(crop=det.success)
-    return edits[page["id"]]
+
+def _remember(cache: dict, key, value):
+    if len(cache) >= CACHE_LIMIT:
+        cache.pop(next(iter(cache)))
+    cache[key] = value
+    return value
 
 
-def render_final(page, preview_max=None):
-    """Render a page with its current edit settings."""
-    return pipeline.render_page(
-        page["image"], ensure_settings(page), corners_for(page), preview_max
+def geometry_preview(page, settings: EditSettings):
+    """Cropped/straightened/rotated page at preview size. Cached separately so
+    colour and filter changes don't repeat the full-resolution geometry work."""
+    key = (page["id"], settings.geometry_key())
+    cache = ss["geo_cache"]
+    if key in cache:
+        return cache[key]
+    geo = pipeline.apply_geometry(page["image"], settings, corners_for(page))
+    return _remember(cache, key, pipeline.downscale(geo, PREVIEW_SIZE))
+
+
+def rendered(page, settings: EditSettings, size: int):
+    """Edited page rendered at ``size`` (cached by settings)."""
+    key = (page["id"], settings.key(), size)
+    cache = ss["render_cache"]
+    if key in cache:
+        return cache[key]
+    base = pipeline.downscale(geometry_preview(page, settings), size)
+    return _remember(cache, key, pipeline.apply_look(base, settings))
+
+
+def display(page, settings: EditSettings, size: int):
+    return image_io.to_display(rendered(page, settings, size))
+
+
+def tile(page, settings: EditSettings, size: int, ratio: float = 1.3):
+    """Thumbnail cropped to a fixed portrait aspect (height = ratio * width),
+    anchored at the top of the page, so tiles line up in a strip."""
+    image = display(page, settings, size)
+    h, w = image.shape[:2]
+    if h > ratio * w:
+        return image[: int(ratio * w)]
+    target_w = int(h / ratio)
+    left = (w - target_w) // 2
+    return image[:, left:left + target_w]
+
+
+def letterboxed(page, settings: EditSettings, size: int, ratio: float = 1.3):
+    """Whole page centred on a neutral backdrop of fixed aspect, so cards in
+    the export carousel line up without cropping any content."""
+    image = display(page, settings, size)
+    if image.ndim == 2:
+        image = np.stack([image] * 3, axis=-1)
+    h, w = image.shape[:2]
+    canvas_w, canvas_h = (w, int(w * ratio)) if h < w * ratio else (int(h / ratio), h)
+    canvas = np.empty((canvas_h, canvas_w, 3), dtype=np.uint8)
+    canvas[:] = (241, 244, 249)
+    top, left = (canvas_h - h) // 2, (canvas_w - w) // 2
+    canvas[top:top + h, left:left + w] = image
+    return canvas
+
+
+def quality_report(page, settings: EditSettings):
+    key = (page["id"], settings.key())
+    cache = ss["quality_cache"]
+    if key in cache:
+        return cache[key]
+    measured = pipeline.measurement_settings(settings)
+    report = quality.calculate_quality_score(
+        rendered(page, measured, PREVIEW_SIZE), get_detection(page).success
     )
+    return _remember(cache, key, report)
+
+
+@st.cache_data(ttl=120, show_spinner=False)
+def ocr_status() -> tuple[bool, str, list[str]]:
+    available, info = ocr.is_available()
+    return available, info, ocr.available_languages() if available else []
+
+
+# ==========================================================================
+# Actions (used as widget callbacks)
+# ==========================================================================
+def go(target: str) -> None:
+    ss["nav"] = target
+
+
+def open_page(index: int, target: str = "edit") -> None:
+    ss["cur"] = index
+    ss["nav"] = target
+
+
+def select_page(index: int) -> None:
+    ss["cur"] = max(0, min(index, len(pages()) - 1))
 
 
 def decode_and_validate(data: bytes):
@@ -139,291 +392,661 @@ def decode_and_validate(data: bytes):
     return image, ""
 
 
-# --------------------------------------------------------------------------
-# Shell
-# --------------------------------------------------------------------------
-def app_bar() -> None:
-    n = len(st.session_state["pages"])
+def add_page(image, source: str) -> None:
+    ss["page_counter"] += 1
+    pages().append({"id": ss["page_counter"], "image": image, "source": source})
+
+
+def on_camera(widget_key: str) -> None:
+    photo = ss.get(widget_key)
+    if photo is None:
+        return
+    image, error = decode_and_validate(photo.getvalue())
+    if error:
+        st.toast(error, icon=":material/error:")
+        return
+    add_page(image, "camera")
+    ss["camera_nonce"] += 1  # fresh camera for the next page
+    st.toast(f"Page {len(pages())} added", icon=":material/check_circle:")
+
+
+def on_upload(widget_key: str) -> None:
+    files = ss.get(widget_key) or []
+    added = 0
+    for upload in files:
+        problem = validation.validate_extension(upload.name)
+        image, error = (None, problem.message) if not problem.ok else \
+            decode_and_validate(upload.getvalue())
+        if error:
+            st.toast(f"{upload.name}: {error}", icon=":material/error:")
+            continue
+        add_page(image, "upload")
+        added += 1
+    if files:
+        ss["upload_nonce"] += 1
+    if added:
+        noun = "page" if added == 1 else "pages"
+        st.toast(f"{added} {noun} added", icon=":material/check_circle:")
+
+
+def edit_targets() -> list:
+    return pages() if ss["scope"] == SCOPE_ALL else [current_page()]
+
+
+def set_field(field: str, value) -> None:
+    current = current_page()
+    for page in edit_targets():
+        settings = settings_for(page)
+        page_value = value
+        if field == "crop":  # only pages with detected edges can auto-crop
+            page_value = bool(value) and corners_for(page) is not None
+        setattr(settings, field, page_value)
+        if page["id"] != current["id"]:
+            bump(page["id"])
+
+
+def on_widget(field: str, widget_key: str) -> None:
+    set_field(field, ss[widget_key])
+
+
+def rotate(delta: int) -> None:
+    for page in edit_targets():
+        settings = settings_for(page)
+        settings.rotate = (settings.rotate + delta) % 360
+
+
+def reset_current() -> None:
+    page = current_page()
+    ss["edits"][page["id"]] = EditSettings(crop=get_detection(page).success)
+    bump(page["id"])
+    st.toast("Edits reset", icon=":material/restart_alt:")
+
+
+def copy_look_to_all() -> None:
+    page = current_page()
+    base = settings_for(page)
+    for other in pages():
+        if other["id"] == page["id"]:
+            continue
+        copied = base.copy()
+        copied.crop = base.crop and corners_for(other) is not None
+        ss["edits"][other["id"]] = copied
+        bump(other["id"])
+    st.toast("Look applied to all pages", icon=":material/done_all:")
+
+
+def move_page(page_id: int, direction: int) -> None:
+    items = pages()
+    index = next((i for i, p in enumerate(items) if p["id"] == page_id), None)
+    if index is None:
+        return
+    target = index + direction
+    if 0 <= target < len(items):
+        items[index], items[target] = items[target], items[index]
+        if ss["cur"] == index:
+            ss["cur"] = target
+        elif ss["cur"] == target:
+            ss["cur"] = index
+
+
+def delete_page(page_id: int) -> None:
+    index = next((i for i, p in enumerate(pages()) if p["id"] == page_id), None)
+    if index is None:
+        return
+    ss["pages"] = [p for p in pages() if p["id"] != page_id]
+    for store in ("detections", "edits", "versions", "ocr_results"):
+        ss[store].pop(page_id, None)
+    for store in ("render_cache", "geo_cache", "quality_cache"):
+        ss[store] = {k: v for k, v in ss[store].items() if k[0] != page_id}
+    if ss["cur"] >= index and ss["cur"] > 0:
+        ss["cur"] -= 1
+    st.toast("Page deleted", icon=":material/delete:")
+
+
+def clear_document() -> None:
+    for store in ("detections", "edits", "versions", "ocr_results",
+                  "render_cache", "geo_cache", "quality_cache"):
+        ss[store] = {}
+    ss["pages"] = []
+    ss["cur"] = 0
+
+
+# ==========================================================================
+# Shared UI pieces
+# ==========================================================================
+def top_bar() -> None:
+    count = len(pages())
+    pill = (f'<span class="pill">{count} page{"" if count == 1 else "s"}</span>'
+            if count else "")
     st.markdown(
-        f"""<div class="app-bar"><h1>📄 Smart Document Scanner</h1>
-        <p>Capture • Detect • Correct • Enhance • Extract &nbsp;·&nbsp;
-        {n} page(s)</p></div>""",
+        f'<div class="topbar"><div class="brand">{LOGO_SVG}'
+        f'<span>Smart Document Scanner</span></div>{pill}</div>',
         unsafe_allow_html=True,
     )
 
 
-# --------------------------------------------------------------------------
-# Screen: Capture
-# --------------------------------------------------------------------------
-def screen_capture() -> None:
-    st.subheader("📷 Add a page")
-    mode = st.segmented_control("Source", ["Camera", "Upload"], default="Camera",
-                                key="capture_mode", label_visibility="collapsed") \
-        or "Camera"
-
-    with st.container(border=True):
-        if mode == "Camera":
-            photo = st.camera_input("Point at the document and capture",
-                                    key=f"camera_{st.session_state['camera_nonce']}")
-            if photo is not None and st.button("➕ Add this page", type="primary",
-                                               use_container_width=True):
-                image, error = decode_and_validate(photo.getvalue())
-                if error:
-                    st.error(error)
-                else:
-                    n = len(st.session_state["pages"]) + 1
-                    add_page(image, f"Camera page {n}", "camera")
-                    st.session_state["camera_nonce"] += 1
-                    st.toast("Page added")
-                    st.rerun()
-        else:
-            uploads = st.file_uploader(
-                "Upload image(s)", type=list(validation.SUPPORTED_EXTENSIONS),
-                accept_multiple_files=True,
-                key=f"upload_{st.session_state['upload_nonce']}")
-            if uploads and st.button(f"➕ Add {len(uploads)} page(s)", type="primary",
-                                     use_container_width=True):
-                added, errors = 0, []
-                for up in uploads:
-                    ext_check = validation.validate_extension(up.name)
-                    if not ext_check.ok:
-                        errors.append(f"{up.name}: {ext_check.message}")
-                        continue
-                    image, error = decode_and_validate(up.getvalue())
-                    if error:
-                        errors.append(f"{up.name}: {error}")
-                        continue
-                    add_page(image, up.name, "upload")
-                    added += 1
-                for message in errors:
-                    st.warning(message)
-                if added:
-                    st.session_state["upload_nonce"] += 1
-                    st.toast(f"Added {added} page(s)")
-                    st.rerun()
-
-    st.caption("📸 Camera works over localhost without HTTPS. Capture pages one "
-               "after another, then open **Edit** to apply scanner filters.")
+def empty_state(title: str, text: str) -> None:
+    st.markdown(
+        f'<div class="empty">{EMPTY_SVG}<h3>{title}</h3><p>{text}</p></div>',
+        unsafe_allow_html=True,
+    )
+    st.button("Scan a page", type="primary", icon=":material/document_scanner:",
+              width="stretch", on_click=go, args=("scan",))
 
 
-# --------------------------------------------------------------------------
-# Screen: Edit (CamScanner-style, per page or all pages)
-# --------------------------------------------------------------------------
-_CONTROL_DEFAULTS = {
-    "ed_filter": "filter_mode", "ed_crop": "crop", "ed_deskew": "deskew",
-    "ed_rotate": "rotate", "ed_bright": "brightness", "ed_contrast": "contrast",
-    "ed_sharpen": "sharpen", "ed_block": "bw_block_size", "ed_c": "bw_c",
-}
+def bottom_nav() -> None:
+    with st.container(key="bottomnav"):
+        st.segmented_control(
+            "Navigation", list(NAV_LABELS), format_func=NAV_LABELS.get,
+            key="nav", required=True, label_visibility="collapsed", width="stretch",
+        )
 
 
-def _seed_controls(settings: EditSettings) -> None:
-    """Load a page's settings into the edit widgets' session_state (overwrite)."""
-    for key, attr in _CONTROL_DEFAULTS.items():
-        st.session_state[key] = getattr(settings, attr)
+def safe_filename(name: str) -> str:
+    cleaned = re.sub(r"[^\w\- ]+", "", name).strip().replace(" ", "_")
+    return cleaned or "Scan"
 
 
-def _ensure_control_keys(settings: EditSettings) -> None:
-    """Seed any control keys that are missing (e.g. a conditionally-shown
-    slider whose state Streamlit cleaned up) without overwriting live values."""
-    for key, attr in _CONTROL_DEFAULTS.items():
-        if key not in st.session_state:
-            st.session_state[key] = getattr(settings, attr)
+# ==========================================================================
+# Scan screen
+# ==========================================================================
+def screen_scan() -> None:
+    st.markdown(
+        '<div class="screen-head"><div class="screen-title">Add pages</div>'
+        '<div class="muted">Capture pages one after another — each photo is '
+        'added to your document automatically.</div></div>',
+        unsafe_allow_html=True,
+    )
+
+    prime("w_capture", "capture_mode")
+    st.segmented_control(
+        "Capture mode", ["Camera", "Upload"], key="w_capture", required=True,
+        format_func=lambda m: (":material/photo_camera: Camera" if m == "Camera"
+                               else ":material/upload: Upload"),
+        on_change=sync, args=("w_capture", "capture_mode"),
+        label_visibility="collapsed", width="stretch",
+    )
+
+    if ss["capture_mode"] == "Camera":
+        key = f"camera_{ss['camera_nonce']}"
+        st.camera_input("Capture page", key=key, on_change=on_camera, args=(key,),
+                        label_visibility="collapsed")
+    else:
+        key = f"upload_{ss['upload_nonce']}"
+        st.file_uploader(
+            "Upload images", type=list(validation.SUPPORTED_EXTENSIONS),
+            accept_multiple_files=True, key=key, on_change=on_upload, args=(key,),
+            label_visibility="collapsed",
+        )
+
+    if pages():
+        st.markdown(f'<p class="section-label">In this document · {len(pages())}</p>',
+                    unsafe_allow_html=True)
+        with st.container(horizontal=True, key="recent", gap="small"):
+            for index, page in enumerate(pages()):
+                with st.container(key=f"recent_{page['id']}", width=70, gap=None):
+                    st.image(tile(page, settings_for(page), THUMB_SIZE), width="stretch")
+                    st.markdown(f'<p class="page-no">{index + 1}</p>',
+                                unsafe_allow_html=True)
+        st.button("Continue to edit", type="primary", icon=":material/arrow_forward:",
+                  icon_position="right", width="stretch", on_click=go, args=("edit",))
+    else:
+        st.markdown(
+            '<div class="tips"><h4>For a clean scan</h4><ul>'
+            '<li>Place the page on a darker, contrasting surface</li>'
+            '<li>Use even lighting and avoid casting shadows</li>'
+            '<li>Keep all four corners of the page in the frame</li>'
+            '</ul></div>',
+            unsafe_allow_html=True,
+        )
 
 
+# ==========================================================================
+# Edit screen
+# ==========================================================================
 def screen_edit() -> None:
-    pages = st.session_state["pages"]
-    if not pages:
-        st.info("No pages yet. Add one from the **Capture** tab.")
+    if not pages():
+        empty_state("No pages yet", "Scan or upload a page to start editing.")
         return
 
-    st.subheader("✏️ Edit page")
-    labels = {f"Page {i + 1}": p for i, p in enumerate(pages)}
-    choice = st.selectbox("Page", list(labels.keys()), label_visibility="collapsed")
-    page = labels[choice]
-    settings = ensure_settings(page)
+    page = current_page()
+    index, total = ss["cur"], len(pages())
+    settings = settings_for(page)
     det = get_detection(page)
 
-    # When the selected page changes, load its stored settings into the widgets.
-    if st.session_state["ed_loaded_page"] != page["id"]:
-        _seed_controls(settings)
-        st.session_state["ed_loaded_page"] = page["id"]
-    _ensure_control_keys(settings)
+    def wkey(field: str) -> str:
+        return f"w_{field}_{page['id']}_{version(page['id'])}"
 
-    # --- Filter picker ---
-    with st.container(border=True):
-        st.markdown("**Filter**")
-        filter_mode = st.segmented_control(
-            "Filter", pipeline.FILTER_MODES, key="ed_filter",
-            label_visibility="collapsed") or pipeline.FILTER_ORIGINAL
+    # --- Pager -----------------------------------------------------------
+    with st.container(horizontal=True, key="pager", vertical_alignment="center",
+                      gap="small"):
+        st.markdown(f'<div class="pager-label">Page {index + 1} '
+                    f'<span>of {total}</span></div>',
+                    unsafe_allow_html=True, width="stretch")
+        st.button("", icon=":material/chevron_left:", key="prev_page",
+                  help="Previous page", disabled=index == 0,
+                  on_click=select_page, args=(index - 1,))
+        st.button("", icon=":material/chevron_right:", key="next_page",
+                  help="Next page", disabled=index == total - 1,
+                  on_click=select_page, args=(index + 1,))
+        with st.popover("", icon=":material/more_vert:", help="Page options"):
+            st.button("Apply this look to all pages", icon=":material/done_all:",
+                      width="stretch", disabled=total == 1, on_click=copy_look_to_all)
+            st.button("Move page left", icon=":material/arrow_back:", width="stretch",
+                      disabled=index == 0, on_click=move_page, args=(page["id"], -1))
+            st.button("Move page right", icon=":material/arrow_forward:",
+                      width="stretch", disabled=index == total - 1,
+                      on_click=move_page, args=(page["id"], 1))
+            st.button("Reset edits", icon=":material/restart_alt:", width="stretch",
+                      on_click=reset_current)
+            st.button("Delete page", icon=":material/delete:", width="stretch",
+                      on_click=delete_page, args=(page["id"],))
 
-        # --- Geometry row ---
-        col_a, col_b = st.columns(2)
-        with col_a:
-            crop = st.checkbox("Auto-crop edges", key="ed_crop",
-                               disabled=not det.success,
-                               help=None if det.success else
-                               "No document boundary detected for this page.")
-            deskew = st.checkbox("Auto-straighten", key="ed_deskew")
-        with col_b:
-            if st.button("🔄 Rotate 90°", use_container_width=True):
-                st.session_state["ed_rotate"] = (st.session_state["ed_rotate"] + 90) % 360
-                st.rerun()
-            st.caption(f"Rotation: {st.session_state['ed_rotate']}°")
+    # --- Preview ---------------------------------------------------------
+    with st.container(key="preview"):
+        st.image(display(page, settings, PREVIEW_SIZE), width="stretch")
 
-        # --- Adjustments ---
-        brightness = st.slider("Brightness", -100, 100, key="ed_bright")
-        contrast = st.slider("Contrast", 0.5, 2.0, step=0.05, key="ed_contrast")
-        if filter_mode != pipeline.FILTER_BW:
-            sharpen = st.slider("Sharpen", 0.0, 3.0, step=0.1, key="ed_sharpen")
-        else:
-            sharpen = st.session_state["ed_sharpen"]
+    # --- Swipeable page strip ----------------------------------------------
+    if total > 1:
+        with st.container(horizontal=True, key="thumbs", gap="small"):
+            for i, other in enumerate(pages()):
+                selected = "_sel" if i == index else ""
+                with st.container(key=f"thumb_{other['id']}{selected}", width=58,
+                                  gap=None):
+                    st.image(tile(other, settings_for(other), THUMB_SIZE),
+                             width="stretch")
+                    st.markdown(f'<div class="tile-label">{i + 1}</div>',
+                                unsafe_allow_html=True)
+                    # Invisible button stretched over the whole tile (see CSS).
+                    st.button(f"Page {i + 1}", key=f"tbtn_{other['id']}",
+                              type="tertiary", on_click=select_page, args=(i,))
 
-        # B&W-specific controls
-        if filter_mode == pipeline.FILTER_BW:
-            block = st.slider("B&W detail (block size)", 3, 51, step=2, key="ed_block")
-            c_val = st.slider("B&W threshold bias", -20, 30, key="ed_c")
-        else:
-            block = st.session_state["ed_block"]
-            c_val = st.session_state["ed_c"]
+        prime("w_scope", "scope")
+        st.segmented_control(
+            "Apply edits to", [SCOPE_PAGE, SCOPE_ALL], key="w_scope", required=True,
+            format_func=lambda s: (":material/description: Edit this page"
+                                   if s == SCOPE_PAGE
+                                   else ":material/library_books: Edit all pages"),
+            on_change=sync, args=("w_scope", "scope"),
+            label_visibility="collapsed", width="stretch",
+        )
+    else:
+        ss["scope"] = SCOPE_PAGE
 
-    # --- Persist the edited settings for this page ---
-    new_settings = EditSettings(
-        crop=crop, deskew=deskew, rotate=st.session_state["ed_rotate"],
-        brightness=brightness, contrast=contrast, sharpen=sharpen,
-        filter_mode=filter_mode, bw_block_size=block, bw_c=c_val,
+    # --- Tools -----------------------------------------------------------
+    t_filter, t_adjust, t_crop, t_text, t_quality = st.tabs(
+        [":material/auto_awesome: Filters", ":material/tune: Adjust",
+         ":material/crop: Crop", ":material/text_fields: Text",
+         ":material/insights: Quality"],
+        key="edit_tabs",
     )
-    st.session_state["edits"][page["id"]] = new_settings
+    with t_filter:
+        filters_panel(page, settings, wkey)
+    with t_adjust:
+        adjust_panel(settings, wkey)
+    with t_crop:
+        crop_panel(page, settings, det, wkey)
+    with t_text:
+        text_panel(page, settings)
+    with t_quality:
+        quality_panel(page, settings)
 
-    # --- Live preview (before / after) ---
-    st.markdown("**Preview**")
-    col_before, col_after = st.columns(2)
-    with col_before:
-        st.image(image_io.to_display(pipeline.render_page(
-            page["image"], EditSettings(), None, PREVIEW_MAX)),
-            caption="Original", use_container_width=True)
-    with col_after:
-        preview = pipeline.render_page(page["image"], new_settings,
-                                       corners_for(page), PREVIEW_MAX)
-        st.image(preview, caption="Edited", use_container_width=True)
 
-    # --- Apply / reset ---
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("📋 Apply to all pages", type="primary",
-                     use_container_width=True):
-            for p in pages:
-                s = new_settings.copy()
-                # crop only where that page actually has a detected boundary
-                s.crop = new_settings.crop and corners_for(p) is not None
-                st.session_state["edits"][p["id"]] = s
-            st.toast("Applied to all pages")
-    with col2:
-        if st.button("↩️ Reset this page", use_container_width=True):
-            st.session_state["edits"][page["id"]] = EditSettings(crop=det.success)
-            st.session_state["ed_loaded_page"] = None  # force reseed
-            st.rerun()
+def filters_panel(page, settings: EditSettings, wkey) -> None:
+    with st.container(horizontal=True, key="filters", gap="small"):
+        for i, mode in enumerate(pipeline.FILTER_MODES):
+            variant = settings.copy()
+            variant.filter_mode = mode
+            selected = "_sel" if settings.filter_mode == mode else ""
+            with st.container(key=f"filt_{i}{selected}", width=80, gap=None):
+                st.image(tile(page, variant, TILE_SIZE), width="stretch")
+                st.markdown(f'<div class="tile-label">{FILTER_LABELS[mode]}</div>',
+                            unsafe_allow_html=True)
+                st.button(FILTER_LABELS[mode], key=f"fbtn_{i}", type="tertiary",
+                          on_click=set_field, args=("filter_mode", mode))
 
-    if not det.success:
-        st.caption(f"ℹ️ {det.message}")
+    if settings.filter_mode == pipeline.FILTER_BW:
+        st.slider("Detail", 3, 51, step=2, value=settings.bw_block_size,
+                  key=wkey("bw_block_size"), on_change=on_widget,
+                  args=("bw_block_size", wkey("bw_block_size")),
+                  help="Smaller values keep finer detail.")
+        st.slider("Threshold", -20, 30, value=settings.bw_c, key=wkey("bw_c"),
+                  on_change=on_widget, args=("bw_c", wkey("bw_c")),
+                  help="Higher values make the page whiter.")
 
-    with st.expander("🔬 Processing steps (for the lab demo)"):
-        gray = preprocessing.to_grayscale(page["image"])
-        edges = preprocessing.canny_edges(page["image"])
-        st.image(gray, caption="Grayscale", use_container_width=True)
-        st.image(edges, caption="Canny edges", use_container_width=True)
+
+def adjust_panel(settings: EditSettings, wkey) -> None:
+    st.slider("Brightness", -100, 100, value=settings.brightness,
+              key=wkey("brightness"), on_change=on_widget,
+              args=("brightness", wkey("brightness")))
+    st.slider("Contrast", 0.5, 2.0, step=0.05, value=float(settings.contrast),
+              key=wkey("contrast"), on_change=on_widget,
+              args=("contrast", wkey("contrast")))
+    if settings.filter_mode != pipeline.FILTER_BW:
+        st.slider("Sharpness", 0.0, 3.0, step=0.1, value=float(settings.sharpen),
+                  key=wkey("sharpen"), on_change=on_widget,
+                  args=("sharpen", wkey("sharpen")))
+    st.segmented_control(
+        "Noise reduction", [0, 1, 2], default=settings.denoise,
+        format_func=lambda v: ["Off", "Light", "Strong"][v], required=True,
+        key=wkey("denoise"), on_change=on_widget, args=("denoise", wkey("denoise")),
+        width="stretch",
+    )
+    st.toggle("Clean background", value=settings.clean_background,
+              key=wkey("clean_background"), on_change=on_widget,
+              args=("clean_background", wkey("clean_background")),
+              help="Removes shadows and evens out lighting across the page.")
+
+
+def crop_panel(page, settings: EditSettings, det, wkey) -> None:
+    if det.success:
+        st.badge("Page edges detected", icon=":material/check_circle:", color="green")
+    else:
+        st.badge("Page edges not found — use manual trim", icon=":material/info:",
+                 color="orange")
+
+    st.toggle("Crop to page edges", value=settings.crop and det.success,
+              disabled=not det.success, key=wkey("crop"),
+              on_change=on_widget, args=("crop", wkey("crop")))
+    st.toggle("Straighten", value=settings.deskew, key=wkey("deskew"),
+              on_change=on_widget, args=("deskew", wkey("deskew")),
+              help="Detects a slight tilt and levels the page.")
+
+    with st.container(horizontal=True, gap="small"):
+        st.button("Rotate left", icon=":material/rotate_left:", width="stretch",
+                  key="rotate_left", on_click=rotate, args=(90,))
+        st.button("Rotate right", icon=":material/rotate_right:", width="stretch",
+                  key="rotate_right", on_click=rotate, args=(-90,))
+
+    with st.expander("Manual trim", icon=":material/crop_free:",
+                     expanded=not det.success):
+        for field, label in (("margin_top", "Top"), ("margin_bottom", "Bottom"),
+                             ("margin_left", "Left"), ("margin_right", "Right")):
+            st.slider(label, 0, 40, value=getattr(settings, field), format="%d%%",
+                      key=wkey(field), on_change=on_widget, args=(field, wkey(field)))
+
+    with st.expander("How this page was detected", icon=":material/visibility:"):
+        small, _ = preprocessing.resize_for_detection(page["image"], 700)
+        st.image(preprocessing.to_grayscale(small), caption="Grayscale", width="stretch")
+        if det.edges is not None:
+            st.image(det.edges, caption="Edge map", width="stretch")
         if det.success:
-            overlay = detection.draw_corners(page["image"], det.corners)
-            st.image(image_io.to_display(overlay),
-                     caption="Detected boundary", use_container_width=True)
+            outlined = detection.draw_corners(page["image"], det.corners, thickness=8)
+            st.image(image_io.to_display(preprocessing.resize_for_detection(outlined, 700)[0]),
+                     caption="Detected page outline", width="stretch")
+        else:
+            st.caption(det.message)
 
 
-# --------------------------------------------------------------------------
-# Screen: Document (review + export of edited pages)
-# --------------------------------------------------------------------------
-def screen_document() -> None:
-    pages = st.session_state["pages"]
-    if not pages:
-        st.info("No pages yet. Add one from the **Capture** tab.")
+def text_panel(page, settings: EditSettings) -> None:
+    available, _, languages = ocr_status()
+    if not available:
+        st.markdown('<p class="muted">Text recognition isn’t set up on this '
+                    'computer yet. Install the free Tesseract OCR engine to '
+                    'extract text from your scans.</p>', unsafe_allow_html=True)
+        with st.expander("How to enable text recognition", icon=":material/help:"):
+            st.markdown(
+                "1. Download the Windows installer from the "
+                "[UB Mannheim Tesseract page](https://github.com/UB-Mannheim/tesseract/wiki).\n"
+                "2. Install it (default folder: `C:\\Program Files\\Tesseract-OCR`).\n"
+                "3. Add that folder to your system **PATH**.\n"
+                "4. Restart the app."
+            )
+            if st.button("Check again", icon=":material/refresh:"):
+                ocr_status.clear()
+                st.rerun()
         return
 
-    st.subheader(f"📑 Document — {len(pages)} page(s)")
-    st.caption("Previews show your edits. Reorder or remove pages; this is the "
-               "export order.")
+    languages = languages or ["eng"]
+    if ss["ocr_lang"] not in languages:
+        ss["ocr_lang"] = "eng" if "eng" in languages else languages[0]
+    prime("w_ocr_lang", "ocr_lang")
 
-    for position, page in enumerate(pages, start=1):
-        with st.container(border=True):
-            col_img, col_ctl = st.columns([2, 1])
-            with col_img:
-                st.image(image_io.to_display(render_final(page, THUMB_MAX)),
-                         use_container_width=True)
-            with col_ctl:
-                st.markdown(f"**Page {position}**")
-                st.caption(ensure_settings(page).filter_mode)
-                if st.button("⬆️ Up", key=f"up_{page['id']}",
-                             use_container_width=True, disabled=position == 1):
-                    move_page(page["id"], -1)
-                    st.rerun()
-                if st.button("⬇️ Down", key=f"down_{page['id']}",
-                             use_container_width=True,
-                             disabled=position == len(pages)):
-                    move_page(page["id"], +1)
-                    st.rerun()
-                if st.button("🗑️ Remove", key=f"del_{page['id']}",
-                             use_container_width=True):
-                    remove_page(page["id"])
-                    st.rerun()
+    with st.container(horizontal=True, vertical_alignment="bottom", gap="small"):
+        st.selectbox("Language", languages, key="w_ocr_lang", on_change=sync,
+                     args=("w_ocr_lang", "ocr_lang"), width="stretch")
+        run = st.button("Recognize", type="primary", icon=":material/text_fields:")
 
-    st.divider()
-    _export_block(pages)
+    if run:
+        with st.spinner("Recognizing text…"):
+            full = pipeline.render_page(page["image"], settings, corners_for(page))
+            result = ocr.extract_text_with_confidence(full, ss["ocr_lang"])
+        ss["ocr_results"][page["id"]] = (settings.key(), ss["ocr_lang"], result)
 
-    if st.button("🗑️ Clear all pages", use_container_width=True):
-        clear_pages()
-        st.rerun()
+    stored = ss["ocr_results"].get(page["id"])
+    if stored is None:
+        st.markdown('<p class="muted small">Tip: the B&W filter usually gives the '
+                    'most accurate text.</p>', unsafe_allow_html=True)
+        return
 
+    key, lang, result = stored
+    if key != settings.key() or lang != ss["ocr_lang"]:
+        st.markdown('<p class="muted small">The page changed since the last '
+                    'recognition. Tap Recognize to update.</p>', unsafe_allow_html=True)
+        return
+    if not result.success:
+        st.warning(result.message, icon=":material/error:")
+        return
+    if not result.text:
+        st.info(result.message, icon=":material/info:")
+        return
 
-def _export_block(pages) -> None:
-    st.markdown("### ⬇️ Export edited document")
-    with st.spinner("Rendering pages at full resolution…"):
-        images = [render_final(p) for p in pages]  # full-res edited pages
-
-    doc_name = st.text_input("Document name", value="scanned_document")
-    safe = (doc_name.strip() or "scanned_document").replace(" ", "_")
-
-    col_pdf, col_zip = st.columns(2)
-    with col_pdf:
-        pdf = document.images_to_pdf_bytes(images)
-        st.download_button("📄 PDF", data=pdf or b"", file_name=f"{safe}.pdf",
-                           mime="application/pdf", disabled=pdf is None,
-                           use_container_width=True)
-    with col_zip:
-        zipped = document.images_to_zip_bytes(images, ".png")
-        st.download_button("🗂️ Images (ZIP)", data=zipped or b"",
-                           file_name=f"{safe}_images.zip", mime="application/zip",
-                           disabled=zipped is None, use_container_width=True)
-    st.caption("PDF/ZIP contain each page with its applied crop, filter, and "
-               "adjustments, in the order above.")
+    st.text_area("Recognized text", value=result.text, height=170,
+                 key=f"ocr_text_{page['id']}_{hash(key)}", label_visibility="collapsed")
+    meta = f"{result.word_count} words"
+    if result.mean_confidence is not None:
+        meta += f" · {result.mean_confidence:.0f}% recognition confidence"
+    st.markdown(f'<p class="muted small">{meta}</p>', unsafe_allow_html=True)
+    st.download_button("Download text", data=result.text.encode("utf-8"),
+                       file_name=f"{safe_filename(ss['doc_name'])}_page_{ss['cur'] + 1}.txt",
+                       mime="text/plain", icon=":material/download:", width="stretch",
+                       on_click="ignore", key=f"ocr_dl_{page['id']}")
 
 
-# --------------------------------------------------------------------------
+def quality_panel(page, settings: EditSettings) -> None:
+    report = quality_report(page, settings)
+    if report is None:
+        st.info("Quality could not be measured for this page.")
+        return
+
+    color = QUALITY_COLORS[report.label]
+    score = round(report.overall)
+    summary = {
+        "Excellent": "Crisp, well-exposed and clean.",
+        "Good": "Clear and readable.",
+        "Fair": "Readable, but could be improved.",
+        "Poor": "Hard to read — try retaking the photo.",
+    }[report.label]
+
+    metrics = [
+        ("Sharpness", report.scores["sharpness"]),
+        ("Contrast", report.scores["contrast"]),
+        ("Exposure", report.scores["brightness"]),
+        ("Cleanliness", report.scores["noise"]),
+    ]
+    bars = "".join(
+        f'<div class="metric"><div class="metric-top"><span>{name}</span>'
+        f'<span>{value:.0f}</span></div><div class="bar"><i style="width:{value:.0f}%;'
+        f'background:{color}"></i></div></div>'
+        for name, value in metrics
+    )
+    st.markdown(
+        f'<div class="q-head"><div class="ring" style="--p:{score};--c:{color}">'
+        f'<div class="ring-inner"><b>{score}</b><small>of 100</small></div></div>'
+        f'<div><div class="q-label" style="color:{color}">{report.label}</div>'
+        f'<p class="muted">{summary}</p></div></div>{bars}',
+        unsafe_allow_html=True,
+    )
+
+    tips = []
+    if report.scores["sharpness"] < 50:
+        tips.append("Hold the camera steady or increase Sharpness.")
+    if report.scores["brightness"] < 60:
+        tips.append("Adjust Brightness, or turn on Clean background.")
+    if report.scores["contrast"] < 50:
+        tips.append("Try the Magic or B&W filter for stronger contrast.")
+    if report.scores["noise"] < 50:
+        tips.append("Turn on Noise reduction.")
+    if tips:
+        st.markdown('<p class="section-label" style="margin-top:14px">Suggestions</p>'
+                    + "".join(f'<p class="muted small">• {t}</p>' for t in tips),
+                    unsafe_allow_html=True)
+
+    with st.expander("How the score works", icon=":material/info:"):
+        st.markdown(
+            f"Raw measurements: brightness {report.brightness:.0f}, contrast "
+            f"{report.contrast:.1f}, sharpness {report.sharpness:.0f}, noise "
+            f"{report.noise:.1f}.\n\n"
+            "Each is scaled to 0–100 and weighted (sharpness 35%, contrast 25%, "
+            "exposure 20%, cleanliness 20%). Black & white pages are measured "
+            "on their grayscale version, since pure black and white would "
+            "inflate the result. The score is an estimate based on image "
+            "statistics and is a guide, not an absolute measure."
+        )
+
+
+# ==========================================================================
+# Export screen
+# ==========================================================================
+def _render_all(snapshot):
+    return [pipeline.render_page(img, s, c) for img, s, c in snapshot]
+
+
+def _build_pdf(snapshot) -> bytes:
+    return document.images_to_pdf_bytes(_render_all(snapshot)) or b""
+
+
+def _build_zip(snapshot) -> bytes:
+    return document.images_to_zip_bytes(_render_all(snapshot), ".png") or b""
+
+
+def _build_text(snapshot, language: str) -> bytes:
+    parts = []
+    for number, image in enumerate(_render_all(snapshot), start=1):
+        result = ocr.extract_text(image, language)
+        body = result.text if result.success and result.text else "[No text found]"
+        parts.append(f"--- Page {number} ---\n{body}")
+    return "\n\n".join(parts).encode("utf-8")
+
+
+def start_new_document() -> None:
+    clear_document()
+    ss["nav"] = "scan"
+    st.toast("Ready for a new document", icon=":material/add:")
+
+
+@st.dialog("Start a new document?")
+def confirm_new_document() -> None:
+    st.write("All pages and edits in the current document will be removed.")
+    with st.container(horizontal=True, gap="small"):
+        if st.button("Cancel", width="stretch"):
+            st.rerun()
+        # The callback does the work, so it runs whether Streamlit reruns just
+        # the dialog or the whole app; st.rerun() then closes the dialog.
+        if st.button("Remove pages", type="primary", width="stretch",
+                     on_click=start_new_document):
+            st.rerun()
+
+
+def screen_export() -> None:
+    if not pages():
+        empty_state("Nothing to export", "Scan or upload pages to build your document.")
+        return
+
+    total = len(pages())
+    st.markdown(
+        f'<div class="screen-head"><div class="screen-title">Your document</div>'
+        f'<div class="muted">{total} page{"" if total == 1 else "s"}'
+        f'{" · swipe to review" if total > 1 else ""}</div></div>',
+        unsafe_allow_html=True,
+    )
+
+    with st.container(horizontal=True, key="carousel", gap="medium"):
+        for i, page in enumerate(pages()):
+            settings = settings_for(page)
+            report = quality_report(page, settings)
+            with st.container(key=f"card_{page['id']}", width=250, border=True,
+                              gap="small"):
+                st.image(letterboxed(page, settings, CARD_SIZE), width="stretch")
+                with st.container(horizontal=True, vertical_alignment="center",
+                                  horizontal_alignment="distribute"):
+                    st.markdown(f"**Page {i + 1}**")
+                    if report is not None:
+                        st.badge(f"{report.label} · {report.overall:.0f}",
+                                 color={"Excellent": "green", "Good": "blue",
+                                        "Fair": "orange", "Poor": "red"}[report.label])
+                with st.container(horizontal=True, horizontal_alignment="distribute"):
+                    st.button("", icon=":material/arrow_back:", key=f"cl_{page['id']}",
+                              help="Move left", type="tertiary", disabled=i == 0,
+                              on_click=move_page, args=(page["id"], -1))
+                    st.button("", icon=":material/edit:", key=f"ce_{page['id']}",
+                              help="Edit page", type="tertiary",
+                              on_click=open_page, args=(i,))
+                    st.button("", icon=":material/delete:", key=f"cd_{page['id']}",
+                              help="Delete page", type="tertiary",
+                              on_click=delete_page, args=(page["id"],))
+                    st.button("", icon=":material/arrow_forward:", key=f"cr_{page['id']}",
+                              help="Move right", type="tertiary", disabled=i == total - 1,
+                              on_click=move_page, args=(page["id"], 1))
+
+    available, _, _ = ocr_status()
+    formats = ["PDF", "Images"] + (["Text"] if available else [])
+    if ss["export_format"] not in formats:
+        ss["export_format"] = "PDF"
+
+    with st.container(border=True):
+        prime("w_doc_name", "doc_name")
+        st.text_input("File name", key="w_doc_name", on_change=sync,
+                      args=("w_doc_name", "doc_name"), max_chars=60)
+        prime("w_format", "export_format")
+        st.segmented_control(
+            "Format", formats, key="w_format", required=True,
+            format_func=lambda f: {"PDF": ":material/picture_as_pdf: PDF",
+                                   "Images": ":material/photo_library: Images",
+                                   "Text": ":material/notes: Text"}[f],
+            on_change=sync, args=("w_format", "export_format"), width="stretch",
+        )
+
+        name = safe_filename(ss["doc_name"])
+        snapshot = [(p["image"], settings_for(p).copy(), corners_for(p)) for p in pages()]
+        fmt = ss["export_format"]
+        if fmt == "PDF":
+            data, file_name, mime = (lambda: _build_pdf(snapshot)), f"{name}.pdf", \
+                "application/pdf"
+        elif fmt == "Images":
+            data, file_name, mime = (lambda: _build_zip(snapshot)), f"{name}.zip", \
+                "application/zip"
+        else:
+            lang = ss["ocr_lang"]
+            data, file_name, mime = (lambda: _build_text(snapshot, lang)), \
+                f"{name}.txt", "text/plain"
+
+        st.download_button(
+            f"Download {fmt if fmt != 'Images' else 'images'}", data=data,
+            file_name=file_name, mime=mime, type="primary",
+            icon=":material/download:", width="stretch", on_click="ignore",
+        )
+        st.markdown('<p class="muted small">Exported at full resolution with all '
+                    'edits applied, in the order shown above.</p>',
+                    unsafe_allow_html=True)
+
+    if st.button("Start a new document", icon=":material/add:", type="tertiary",
+                 width="stretch"):
+        confirm_new_document()
+
+
+# ==========================================================================
 # App
-# --------------------------------------------------------------------------
+# ==========================================================================
 def main() -> None:
-    _init_state()
-    st.markdown(MOBILE_CSS, unsafe_allow_html=True)
-    app_bar()
+    init_state()
+    st.markdown(APP_CSS, unsafe_allow_html=True)
+    top_bar()
 
-    nav = st.segmented_control(
-        "Navigation", ["📷 Capture", "✏️ Edit", "📑 Document"],
-        default="📷 Capture", key="nav", label_visibility="collapsed") \
-        or "📷 Capture"
+    screen = {"scan": screen_scan, "edit": screen_edit, "export": screen_export}
+    screen.get(ss["nav"], screen_scan)()
 
-    if nav == "📷 Capture":
-        screen_capture()
-    elif nav == "✏️ Edit":
-        screen_edit()
-    else:
-        screen_document()
+    bottom_nav()
 
 
-if __name__ == "__main__":
-    main()
+main()

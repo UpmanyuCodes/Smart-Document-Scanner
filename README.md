@@ -1,118 +1,121 @@
 # Smart Document Scanner
 
-Turn a photograph of a physical document into a corrected, enhanced, readable
-digital scan — then extract its text and estimate the scan quality. Built with
-Python, OpenCV, NumPy, Pillow, pytesseract, and a Streamlit interface.
+A mobile-first, browser-based document scanner built with Python, OpenCV and
+Streamlit. Photograph or upload pages, and the app finds each page's edges,
+flattens it, cleans it up with scanner-style filters, measures scan quality,
+extracts the text, and exports the result as a PDF, images, or text.
 
-> **Everything runs locally.** Your documents are never uploaded to any
-> external service, and OCR runs through a locally installed Tesseract engine.
+> **Everything runs locally.** Documents are never sent to an external service,
+> and text recognition uses a locally installed Tesseract engine.
 
-## Build status
+## Using the app
 
-This project is being built in phases. Current state:
+The app has three screens, switched from the bottom tab bar:
 
-| Phase | Scope | Status |
-|------:|-------|--------|
-| 1 | Project foundation, image upload, validation & preview | ✅ Done |
-| — | In-browser camera capture + multi-page document (PDF/ZIP export, reorder/delete) | ✅ Done |
-| — | Mobile-app UI (phone-width frame, app bar, segmented nav, card layout) | ✅ Done |
-| 2 | Preprocessing + automatic document detection (edges, contours, 4 corners) | ✅ Done |
-| 3 | Perspective correction + deskewing | ✅ Done |
-| 4 | Enhancement (brightness/contrast/CLAHE/sharpen) | ✅ Done |
-| 5 | Document filters (grayscale / B&W / high contrast) | ✅ Done |
-| — | CamScanner-style **Edit** screen: per-page filters + adjustments, apply-to-all | ✅ Done |
-| 6 | OCR text extraction (Tesseract) | ⏳ Planned |
-| 7 | Scan quality analyzer | ⏳ Planned |
-| 8 | Full pipeline integration, visualizations, final testing | ⏳ Planned |
+| Screen | What you can do |
+|--------|-----------------|
+| **Scan** | Capture pages with the camera one after another (each photo is added automatically), or upload several JPG/PNG images at once. |
+| **Edit** | Swipe through pages and edit them: filters (Original, Magic, Grayscale, B&W, Contrast) with live previews; brightness, contrast, sharpness, noise reduction and background cleanup; auto-crop to the page edges, straighten, rotate, manual trim; text recognition; and a quality score with suggestions. Choose **Edit this page** or **Edit all pages** to apply changes to one page or the whole document. The ⋮ menu copies a page's look to all pages, reorders, resets, or deletes pages. |
+| **Export** | Swipe through the finished pages, reorder or delete them, name the file and download it as **PDF**, **images (ZIP)**, or **text** (when OCR is available). Exports are rendered at full resolution with all edits applied. |
+
+## Image-processing techniques
+
+| Step | Technique | Module |
+|------|-----------|--------|
+| Preprocessing | Grayscale conversion, Gaussian blur, resizing for detection | `scanner/preprocessing.py` |
+| Page detection | Canny edges → morphological closing → contours → polygon approximation → largest convex quadrilateral | `scanner/detection.py` |
+| Perspective correction | Corner ordering + homography (`getPerspectiveTransform` / `warpPerspective`) | `scanner/perspective.py` |
+| Straightening | Probabilistic Hough lines → median angle → rotation with expanded canvas | `scanner/deskew.py` |
+| Enhancement | Linear brightness/contrast, CLAHE on the LAB lightness channel, unsharp masking | `scanner/enhancement.py` |
+| Noise & shadows | Median / Gaussian filtering; background estimation (dilation + large median blur) and division to even out lighting | `scanner/noise_removal.py` |
+| Filters | Grayscale, adaptive Gaussian threshold (B&W), global / Otsu threshold, histogram equalization | `scanner/filters.py` |
+| Quality score | Mean intensity, standard deviation, variance of the Laplacian, Immerkær noise estimate on flat regions → weighted 0–100 score | `scanner/quality.py` |
+| OCR | Tesseract via `pytesseract`, with Otsu binarization and confidence reporting | `scanner/ocr.py` |
+
+The **quality score** is a heuristic estimate, not a universal measure. Each
+metric is scaled to 0–100 with documented thresholds and combined with weights
+(sharpness 35%, contrast 25%, exposure 20%, cleanliness 20%) defined in one
+place in `scanner/quality.py`. Black & white pages are measured on their
+grayscale version, because pure black and white would inflate the statistics.
 
 ## Project structure
 
 ```
 smart-document-scanner/
-├── app.py                 # Streamlit UI (thin; no processing logic)
+├── app.py                  # Streamlit UI only (no processing logic)
 ├── requirements.txt
-├── README.md
-├── .gitignore
-├── scanner/               # Image-processing modules (filled in across phases)
-│   ├── __init__.py
-│   ├── preprocessing.py   # Grayscale, blur, resize-for-detection, Canny
-│   ├── detection.py       # Edges -> contours -> 4-corner document boundary
-│   ├── perspective.py     # Homography / top-down flattening
-│   ├── deskew.py          # Hough-line skew estimate + rotation
-│   ├── enhancement.py     # Brightness/contrast, CLAHE, unsharp sharpen
-│   ├── filters.py         # Grayscale, global/adaptive/Otsu B&W, high contrast
-│   └── pipeline.py        # EditSettings + per-page render pipeline
+├── .streamlit/config.toml  # Theme, upload limit, usage statistics off
+├── scanner/
+│   ├── preprocessing.py    # Grayscale, blur, resize, Canny
+│   ├── detection.py        # Page boundary detection
+│   ├── perspective.py      # Perspective correction
+│   ├── deskew.py           # Skew estimation and rotation
+│   ├── enhancement.py      # Brightness/contrast, CLAHE, sharpening
+│   ├── noise_removal.py    # Denoising and shadow removal
+│   ├── filters.py          # Scanner filters
+│   ├── ocr.py              # Text recognition
+│   ├── quality.py          # Scan quality metrics and score
+│   └── pipeline.py         # EditSettings + per-page render pipeline
 ├── utils/
-│   ├── __init__.py
-│   ├── image_io.py        # Decode / encode / format conversion
-│   ├── document.py        # Multi-page PDF / ZIP assembly
-│   ├── geometry.py        # Corner ordering & quad geometry
-│   └── validation.py      # Input & parameter validation
-├── tests/
-│   ├── test_image_io.py
-│   ├── test_document.py
-│   ├── test_geometry.py
-│   ├── test_detection.py
-│   ├── test_perspective.py
-│   ├── test_filters.py
-│   ├── test_pipeline.py
-│   └── test_validation.py
-└── assets/
+│   ├── image_io.py         # Decode / encode / colour conversion
+│   ├── document.py         # PDF and ZIP assembly
+│   ├── geometry.py         # Corner ordering, quad geometry
+│   └── validation.py       # Input validation
+└── tests/                  # Unit tests + headless UI tests (Streamlit AppTest)
 ```
 
 ## Setup (Windows PowerShell)
 
-1. **Install Python** (3.10+ recommended).
-
-2. **Create and activate a virtual environment:**
+1. Install **Python 3.10+**.
+2. Create and activate a virtual environment:
 
    ```powershell
    python -m venv .venv
    .venv\Scripts\Activate.ps1
    ```
 
-3. **Install dependencies:**
+3. Install dependencies:
 
    ```powershell
    pip install -r requirements.txt
    ```
 
-4. **Install Tesseract OCR** (needed for the OCR feature in Phase 6).
-   `pytesseract` is only a Python wrapper — it does **not** install the
-   Tesseract engine or its language data. Download the Windows installer from
-   the [UB Mannheim Tesseract build](https://github.com/UB-Mannheim/tesseract/wiki)
-   and either add its install folder (e.g.
-   `C:\Program Files\Tesseract-OCR`) to your `PATH`, or configure the path in
-   the app once OCR lands. The rest of the scanner works without Tesseract.
+4. *(Optional, for text recognition)* Install the **Tesseract OCR engine**.
+   `pytesseract` is only a Python wrapper — it does not include the engine or
+   its language data. Download the Windows installer from the
+   [UB Mannheim Tesseract page](https://github.com/UB-Mannheim/tesseract/wiki),
+   install it (default `C:\Program Files\Tesseract-OCR`), add that folder to
+   your **PATH**, and restart the app. Everything else works without it; the
+   Text tab shows these steps until the engine is found.
 
-## Run the app
+## Run
 
 ```powershell
 streamlit run app.py
 ```
 
-This opens the scanner in your browser. From the sidebar you can:
+Browsers only allow camera access on `localhost` or over HTTPS. To use the
+camera from a phone on the same network, serve the app over HTTPS, or use the
+**Upload** option — on most phones it can open the camera directly.
 
-- **📷 Camera** — take a photo of a page with your webcam, then add it. Capture
-  pages one after another to build a multi-page document. (The browser will ask
-  for camera permission; it works over `localhost` without HTTPS.)
-- **📁 Upload** — add one or several JPG/JPEG/PNG images at once.
-
-Pages appear as a thumbnail strip you can reorder (⬆️/⬇️) or remove (🗑️). Export
-the whole document as a **PDF** or a **ZIP** of images, and inspect any single
-page in detail.
-
-## Run the tests
+## Tests
 
 ```powershell
 pytest -q
 ```
 
-## Notes & limitations
+The suite covers the processing modules with synthetic images and drives the
+UI headlessly (every screen, filters, edit scope, crop tools, page management,
+export, and the new-document flow).
 
-- Designed for a **single document** photographed against a reasonably
-  distinguishable background.
-- The upcoming quality score is a **heuristic estimate** from measurable image
-  properties, not a universal measure of document quality.
-- The original uploaded image is always preserved; all processing runs on
-  copies.
+## Limitations
+
+- Designed for one document per photo, on a background that contrasts with
+  the paper. Similar colours, cut-off corners, or heavy folds can defeat edge
+  detection — use **Manual trim** in that case.
+- Very dark or blurred photos reduce detection and OCR accuracy.
+- OCR accuracy depends on text size, font, language data and image quality;
+  handwriting is not supported.
+- The quality score is an image-statistics estimate and should be read as a
+  guide.
+- The original photos are never modified; all edits are applied to copies.

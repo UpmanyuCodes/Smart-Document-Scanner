@@ -30,7 +30,8 @@ def estimate_skew_angle(image: np.ndarray, max_angle: float = 15.0) -> float | N
         return None
 
     angles = []
-    for x1, y1, x2, y2 in lines[:, 0]:
+    # OpenCV versions differ in output shape ((N,1,4) vs (N,4)); normalize.
+    for x1, y1, x2, y2 in np.asarray(lines).reshape(-1, 4):
         angle = np.degrees(np.arctan2(y2 - y1, x2 - x1))
         # Normalize to [-45, 45] and keep near-horizontal lines only.
         if angle < -45:
