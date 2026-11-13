@@ -1,14 +1,24 @@
+# Shared look. Colours live in [theme.light] / [theme.dark]; with both defined
+# the app follows the device's light/dark setting automatically.
 [theme]
-base = "light"
-primaryColor = "#2563EB"
-backgroundColor = "#F4F6FA"
-secondaryBackgroundColor = "#FFFFFF"
-textColor = "#0F172A"
-borderColor = "#E2E8F0"
-font = "'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, 'Helvetica Neue', Arial, sans-serif"
+font = "-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI Variable Text', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif"
 baseRadius = "12px"
-buttonRadius = "12px"
-showWidgetBorder = true
+buttonRadius = "14px"
+showWidgetBorder = false
+
+[theme.light]
+primaryColor = "#007AFF"
+backgroundColor = "#F2F2F7"
+secondaryBackgroundColor = "#E9E9EE"
+textColor = "#000000"
+borderColor = "#D9D9DE"
+
+[theme.dark]
+primaryColor = "#0A84FF"
+backgroundColor = "#000000"
+secondaryBackgroundColor = "#2C2C2E"
+textColor = "#FFFFFF"
+borderColor = "#38383A"
 
 [client]
 toolbarMode = "minimal"
