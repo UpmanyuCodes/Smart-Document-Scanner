@@ -213,12 +213,15 @@ header[data-testid="stHeader"], #MainMenu, footer,
 /* Everything inside a tab is pinned to px sizes and clipped to the pill, so
    neither phone font settings nor a slow icon font can push it out of frame. */
 .st-key-bottomnav button > div {
-    width: 100%; min-width: 0; height: auto !important; max-height: none !important;
-    display: flex; justify-content: center; overflow: hidden;
+    width: 100%; min-width: 0; flex: 0 0 auto;
+    height: 40px !important; min-height: 40px !important; max-height: none !important;
+    display: flex !important; justify-content: center; align-items: flex-start;
+    overflow: visible !important; -webkit-line-clamp: unset !important;
 }
 .st-key-bottomnav button > div > span {
-    display: flex; flex-direction: column; align-items: center; gap: 1px;
-    width: 100%; min-width: 0; max-width: 100%;
+    display: flex !important; flex-direction: column; align-items: center; gap: 1px;
+    width: 100%; min-width: 0; max-width: 100%; height: 40px; flex: 0 0 auto;
+    overflow: visible;
 }
 .st-key-bottomnav button > div > span > span {
     width: 25px; height: 25px; flex: 0 0 25px; overflow: hidden;
@@ -235,10 +238,17 @@ header[data-testid="stHeader"], #MainMenu, footer,
 .st-key-bottomnav button:nth-child(1) { --nav-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3M8 9h8M8 12h8M8 15h5'/%3E%3C/svg%3E"); }
 .st-key-bottomnav button:nth-child(2) { --nav-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 7h9M17 7h3M4 12h3M11 12h9M4 17h11M19 17h1'/%3E%3Ccircle cx='15' cy='7' r='2'/%3E%3Ccircle cx='9' cy='12' r='2'/%3E%3Ccircle cx='17' cy='17' r='2'/%3E%3C/svg%3E"); }
 .st-key-bottomnav button:nth-child(3) { --nav-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 15V4M8 7l4-4 4 4M8 10H6a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-8a1 1 0 0 0-1-1h-2'/%3E%3C/svg%3E"); }
-.st-key-bottomnav [data-testid="stMarkdownContainer"] { max-width: 100%; min-width: 0; }
+/* Label row can never shrink away under the icon */
+.st-key-bottomnav [data-testid="stMarkdownContainer"] {
+    display: block !important; flex: 0 0 14px; height: 14px; min-height: 14px;
+    max-width: 100%; min-width: 0; overflow: visible !important;
+    color: inherit !important; opacity: 1 !important;
+}
 .st-key-bottomnav button p {
-    font-size: 11px; font-weight: 600; line-height: 14px; margin: 0;
+    display: block !important; font-size: 11px !important; font-weight: 600;
+    line-height: 14px !important; height: 14px; margin: 0 !important;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%;
+    color: inherit !important; opacity: 1 !important; visibility: visible !important;
 }
 .st-key-bottomnav [data-testid="stBaseButton-segmented_controlActive"] {
     background: var(--brand-soft) !important; color: var(--brand) !important;
@@ -327,6 +337,22 @@ header[data-testid="stHeader"], #MainMenu, footer,
 [data-testid="stCameraInput"] button {
     min-height: 50px; border: none !important; background: var(--surface) !important;
     color: var(--brand) !important; font-weight: 600;
+}
+/* Switch-camera control: small frosted circle in the preview's corner */
+[data-testid="stCameraInputSwitchButton"] {
+    top: 10px !important; right: 10px !important; z-index: 2;
+}
+[data-testid="stCameraInput"] [data-testid="stCameraInputSwitchButton"] button {
+    width: 40px !important; height: 40px !important;
+    min-width: 40px; min-height: 40px !important; padding: 0 !important;
+    display: flex; align-items: center; justify-content: center;
+    border-radius: 50% !important; border: none !important;
+    background: rgba(0,0,0,0.45) !important; color: #fff !important;
+    -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
+    box-shadow: 0 1px 4px rgba(0,0,0,0.3);
+}
+[data-testid="stCameraInputSwitchButton"] button svg {
+    width: 22px; height: 22px; color: #fff; fill: currentColor;
 }
 /* Round shutter button (live preview only; "Clear photo" keeps its text) */
 [data-testid="stCameraInput"]:not(:has(img)) [data-testid="stCameraInputButton"] {
