@@ -10,11 +10,14 @@ and ``utils``.
 
 from __future__ import annotations
 
+import base64
 import dataclasses
+import io
 import re
 
 import numpy as np
 import streamlit as st
+from PIL import Image
 
 from scanner import detection, ocr, pipeline, preprocessing, quality
 from scanner.pipeline import EditSettings
@@ -603,6 +606,24 @@ def rendered(page, settings: EditSettings, size: int):
     return _remember(cache, key, pipeline.apply_look(base, settings))
 
 
+def inline(image) -> str:
+    """Image array as a ``data:`` URI for ``st.image``.
+
+    Sending the picture inside the page itself avoids Streamlit's separate
+    ``/media`` download, which fails on some hosted/mobile connections and
+    leaves a broken-image icon.
+    """
+    array = np.ascontiguousarray(image)
+    if array.dtype != np.uint8:
+        array = np.clip(array, 0, 255).astype(np.uint8)
+    picture = Image.fromarray(array)
+    if picture.mode not in ("L", "RGB"):
+        picture = picture.convert("RGB")
+    buffer = io.BytesIO()
+    picture.save(buffer, format="JPEG", quality=88)
+    return "data:image/jpeg;base64," + base64.b64encode(buffer.getvalue()).decode("ascii")
+
+
 def display(page, settings: EditSettings, size: int):
     return image_io.to_display(rendered(page, settings, size))
 
@@ -899,7 +920,7 @@ def screen_scan() -> None:
         with st.container(horizontal=True, key="recent", gap="small"):
             for index, page in enumerate(pages()):
                 with st.container(key=f"recent_{page['id']}", width=70, gap=None):
-                    st.image(tile(page, settings_for(page), THUMB_SIZE), width="stretch")
+                    st.image(inline(tile(page, settings_for(page), THUMB_SIZE)), width="stretch")
                     st.markdown(f'<p class="page-no">{index + 1}</p>',
                                 unsafe_allow_html=True)
         st.button("Continue to edit", type="primary", icon=":material/arrow_forward:",
@@ -958,7 +979,7 @@ def screen_edit() -> None:
 
     # --- Preview ---------------------------------------------------------
     with st.container(key="preview"):
-        st.image(display(page, settings, PREVIEW_SIZE), width="stretch")
+        st.image(inline(display(page, settings, PREVIEW_SIZE)), width="stretch")
 
     # --- Swipeable page strip ----------------------------------------------
     if total > 1:
@@ -967,7 +988,7 @@ def screen_edit() -> None:
                 selected = "_sel" if i == index else ""
                 with st.container(key=f"thumb_{other['id']}{selected}", width=58,
                                   gap=None):
-                    st.image(tile(other, settings_for(other), THUMB_SIZE),
+                    st.image(inline(tile(other, settings_for(other), THUMB_SIZE)),
                              width="stretch")
                     st.markdown(f'<div class="tile-label">{i + 1}</div>',
                                 unsafe_allow_html=True)
@@ -1013,7 +1034,7 @@ def filters_panel(page, settings: EditSettings, wkey) -> None:
             variant.filter_mode = mode
             selected = "_sel" if settings.filter_mode == mode else ""
             with st.container(key=f"filt_{i}{selected}", width=80, gap=None):
-                st.image(tile(page, variant, TILE_SIZE), width="stretch")
+                st.image(inline(tile(page, variant, TILE_SIZE)), width="stretch")
                 st.markdown(f'<div class="tile-label">{FILTER_LABELS[mode]}</div>',
                             unsafe_allow_html=True)
                 st.button(FILTER_LABELS[mode], key=f"fbtn_{i}", type="tertiary",
@@ -1081,12 +1102,13 @@ def crop_panel(page, settings: EditSettings, det, wkey) -> None:
 
     with st.expander("How this page was detected", icon=":material/visibility:"):
         small, _ = preprocessing.resize_for_detection(page["image"], 700)
-        st.image(preprocessing.to_grayscale(small), caption="Grayscale", width="stretch")
+        st.image(inline(preprocessing.to_grayscale(small)), caption="Grayscale", width="stretch")
         if det.edges is not None:
-            st.image(det.edges, caption="Edge map", width="stretch")
+            st.image(inline(det.edges), caption="Edge map", width="stretch")
         if det.success:
             outlined = detection.draw_corners(page["image"], det.corners, thickness=8)
-            st.image(image_io.to_display(preprocessing.resize_for_detection(outlined, 700)[0]),
+            st.image(inline(image_io.to_display(
+                preprocessing.resize_for_detection(outlined, 700)[0])),
                      caption="Detected page outline", width="stretch")
         else:
             st.caption(det.message)
@@ -1281,7 +1303,7 @@ def screen_export() -> None:
             report = quality_report(page, settings)
             with st.container(key=f"card_{page['id']}", width=250, border=True,
                               gap="small"):
-                st.image(letterboxed(page, settings, CARD_SIZE), width="stretch")
+                st.image(inline(letterboxed(page, settings, CARD_SIZE)), width="stretch")
                 with st.container(horizontal=True, vertical_alignment="center",
                                   horizontal_alignment="distribute"):
                     st.markdown(f"**Page {i + 1}**")
