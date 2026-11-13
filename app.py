@@ -354,8 +354,8 @@ header[data-testid="stHeader"], #MainMenu, footer,
 [data-testid="stCameraInputSwitchButton"] button svg {
     width: 22px; height: 22px; color: #fff; fill: currentColor;
 }
-/* Round shutter button (same shape while a shot is being saved) */
-[data-testid="stCameraInput"] [data-testid="stCameraInputButton"] {
+/* Round shutter button (live preview only; "Clear photo" keeps its text) */
+[data-testid="stCameraInput"]:not(:has(img)) [data-testid="stCameraInputButton"] {
     width: 68px !important; height: 68px !important;
     min-width: 68px; min-height: 68px; flex: 0 0 68px;
     display: block; align-self: center; margin: 16px auto 18px !important;
@@ -367,49 +367,15 @@ header[data-testid="stHeader"], #MainMenu, footer,
     transition: transform .12s ease, box-shadow .12s ease, opacity .12s ease;
     -webkit-tap-highlight-color: transparent;
 }
-[data-testid="stCameraInput"] [data-testid="stCameraInputButton"]:hover {
+[data-testid="stCameraInput"]:not(:has(img)) [data-testid="stCameraInputButton"]:hover {
     box-shadow: 0 0 0 4px var(--brand);
 }
-[data-testid="stCameraInput"] [data-testid="stCameraInputButton"]:active {
+[data-testid="stCameraInput"]:not(:has(img)) [data-testid="stCameraInputButton"]:active {
     transform: scale(.88);
 }
-[data-testid="stCameraInput"] [data-testid="stCameraInputButton"]:disabled {
+[data-testid="stCameraInput"]:not(:has(img)) [data-testid="stCameraInputButton"]:disabled {
     opacity: .35;
 }
-
-/* ---- Capture feel: shutter blink, steady frame, soft re-open ---- */
-/* Black stage behind the picture so resizing frames never show grey bars */
-[data-testid="stCameraInputWebcamStyledBox"],
-[data-testid="stCameraInput"] div:has(> img[alt="Snapshot"]) {
-    background: #000 !important; position: relative; overflow: hidden;
-}
-/* Live preview fades in once the camera has settled on its real size,
-   hiding the oversized first frames a phone sends on start-up */
-[data-testid="stCameraInputWebcamStyledBox"] video {
-    animation: cam-open 0.3s ease-out 0.5s both;
-}
-@keyframes cam-open { from { opacity: 0; transform: scale(1.02); }
-                      to { opacity: 1; transform: none; } }
-/* The frozen shot stays fully visible and gets a quick white shutter flash */
-[data-testid="stCameraInput"] img[alt="Snapshot"] {
-    opacity: 1 !important; animation: shot-settle 0.35s var(--ease) both;
-}
-[data-testid="stCameraInput"] div:has(> img[alt="Snapshot"])::after {
-    content: ""; position: absolute; inset: 0; background: #fff;
-    pointer-events: none; animation: shutter-flash 0.4s ease-out both;
-}
-@keyframes shutter-flash { from { opacity: 0.9; } to { opacity: 0; } }
-@keyframes shot-settle { from { transform: scale(1.03); } to { transform: none; } }
-/* While the shot is saving, the shutter stays put and gently pulses */
-[data-testid="stCameraInput"]:has(img[alt="Snapshot"]) [data-testid="stCameraInputButton"] {
-    opacity: 1 !important; pointer-events: none;
-    animation: shutter-busy 0.9s ease-in-out infinite;
-}
-[data-testid="stCameraInput"]:has(img[alt="Snapshot"]) [data-testid="stCameraInputButton"] > * {
-    display: none !important;
-}
-@keyframes shutter-busy { 0%, 100% { transform: scale(0.84); opacity: 0.55; }
-                          50% { transform: scale(0.92); opacity: 0.9; } }
 [data-testid="stDialog"] [role="dialog"] { border-radius: 24px; border: none;
                                            background: var(--surface); }
 [data-testid="stPopoverBody"] { border-radius: 18px; border: 0.5px solid var(--line);
@@ -731,11 +697,11 @@ def on_camera(widget_key: str) -> None:
     if photo is None:
         return
     image, error = decode_and_validate(photo.getvalue())
-    ss["camera_nonce"] += 1  # fresh camera for the next shot, even after an error
     if error:
         st.toast(error, icon=":material/error:")
         return
     add_page(image, "camera")
+    ss["camera_nonce"] += 1  # fresh camera for the next page
     st.toast(f"Page {len(pages())} added", icon=":material/check_circle:")
 
 
