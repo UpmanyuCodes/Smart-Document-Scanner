@@ -113,7 +113,7 @@ header[data-testid="stHeader"], #MainMenu, footer,
 .stApp { -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale;
          -webkit-tap-highlight-color:transparent; }
 .block-container, [data-testid="stMainBlockContainer"] {
-    max-width: 480px; padding: 0.9rem 1rem 8.5rem;
+    max-width: 480px; padding: 0.9rem 1rem calc(8.5rem + var(--nav-lift, 0px));
 }
 /* Keep content steady while the app recomputes instead of dimming it */
 [data-stale="true"] { opacity:1 !important; transition:none !important; }
@@ -192,25 +192,38 @@ header[data-testid="stHeader"], #MainMenu, footer,
 
 /* ---- Floating glass tab bar ---- */
 .st-key-bottomnav {
-    position: fixed; left: 50%; bottom: calc(12px + env(safe-area-inset-bottom));
-    transform: translateX(-50%); width: min(448px, calc(100vw - 24px)); z-index: 999;
+    position: fixed; left: 50%;
+    bottom: calc(12px + var(--nav-lift, 0px) + env(safe-area-inset-bottom));
+    transform: translateX(-50%); width: min(448px, calc(100% - 24px)); z-index: 999;
+    box-sizing: border-box; -webkit-text-size-adjust: 100%; text-size-adjust: 100%;
     background: var(--glass); border: 0.5px solid var(--line); border-radius: 34px;
     -webkit-backdrop-filter: saturate(180%) blur(24px);
     backdrop-filter: saturate(180%) blur(24px);
     padding: 5px; box-shadow: 0 12px 40px rgba(0,0,0,0.16), 0 2px 6px rgba(0,0,0,0.06);
 }
-.st-key-bottomnav [role="radiogroup"] { background: transparent; padding: 0; gap: 4px; }
+.st-key-bottomnav [role="radiogroup"] {
+    background: transparent; padding: 0; gap: 4px; width: 100%;
+    display: grid !important; grid-template-columns: repeat(3, minmax(0, 1fr));
+}
 .st-key-bottomnav [data-testid^="stBaseButton-segmented_control"] {
-    min-height: 54px; border-radius: 29px !important; color: var(--muted) !important;
-    box-shadow: none; padding: 4px 0;
+    width: 100%; height: 54px; min-height: 54px; border-radius: 29px !important;
+    color: var(--muted) !important; box-shadow: none; padding: 4px 0;
+    overflow: visible;
+}
+/* Fixed px sizes + no clipping so large phone font settings can't squash it */
+.st-key-bottomnav button > div {
+    overflow: visible !important; height: auto !important; max-height: none !important;
 }
 .st-key-bottomnav button > div > span {
     display: flex; flex-direction: column; align-items: center; gap: 1px;
+    flex-shrink: 0;
 }
 .st-key-bottomnav [data-testid="stIconMaterial"] { font-size: 25px; width: 25px;
-                                                   height: 25px; }
-.st-key-bottomnav button > div > span > span { width: 25px; height: 25px; }
-.st-key-bottomnav button p { font-size: 0.66rem; font-weight: 600; line-height: 1.2; }
+                                                   height: 25px; flex-shrink: 0; }
+.st-key-bottomnav button > div > span > span { width: 25px; height: 25px;
+                                               flex-shrink: 0; }
+.st-key-bottomnav button p { font-size: 11px; font-weight: 600; line-height: 14px;
+                             white-space: nowrap; }
 .st-key-bottomnav [data-testid="stBaseButton-segmented_controlActive"] {
     background: var(--brand-soft) !important; color: var(--brand) !important;
 }
@@ -774,6 +787,25 @@ def empty_state(title: str, text: str) -> None:
               width="stretch", on_click=go, args=("scan",))
 
 
+def on_community_cloud() -> bool:
+    """True unless the app is clearly running locally (or with ?embed=true).
+
+    Anything that isn't localhost / a private LAN address is treated as hosted,
+    so the tab bar is lifted even if the host name can't be read.
+    """
+    try:
+        url = str(st.context.url or "")
+    except Exception:
+        return True
+    if "embed=true" in url:
+        return False
+    host = url.split("://", 1)[-1].split("/", 1)[0].split(":", 1)[0].lower()
+    local = (host in ("localhost", "0.0.0.0", "[") or host.endswith(".local")
+             or host.startswith(("127.", "10.", "192.168."))
+             or re.match(r"172\.(1[6-9]|2\d|3[01])\.", host) is not None)
+    return not local
+
+
 def bottom_nav() -> None:
     with st.container(key="bottomnav"):
         st.segmented_control(
@@ -1281,6 +1313,11 @@ def screen_export() -> None:
 def main() -> None:
     init_state()
     st.markdown(APP_CSS, unsafe_allow_html=True)
+    if on_community_cloud():
+        # The "Hosted with Streamlit" badge sits outside the app (bottom-right
+        # of the host page) and can't be hidden, so float the tab bar above it.
+        st.markdown("<style>:root { --nav-lift: 64px; }</style>",
+                    unsafe_allow_html=True)
     top_bar()
 
     screen = {"scan": screen_scan, "edit": screen_edit, "export": screen_export}
