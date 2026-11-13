@@ -207,23 +207,39 @@ header[data-testid="stHeader"], #MainMenu, footer,
 }
 .st-key-bottomnav [data-testid^="stBaseButton-segmented_control"] {
     width: 100%; height: 54px; min-height: 54px; border-radius: 29px !important;
-    color: var(--muted) !important; box-shadow: none; padding: 4px 0;
-    overflow: visible;
+    color: var(--muted) !important; box-shadow: none; padding: 4px 2px;
+    overflow: hidden; display: flex; align-items: center; justify-content: center;
 }
-/* Fixed px sizes + no clipping so large phone font settings can't squash it */
+/* Everything inside a tab is pinned to px sizes and clipped to the pill, so
+   neither phone font settings nor a slow icon font can push it out of frame. */
 .st-key-bottomnav button > div {
-    overflow: visible !important; height: auto !important; max-height: none !important;
+    width: 100%; min-width: 0; height: auto !important; max-height: none !important;
+    display: flex; justify-content: center; overflow: hidden;
 }
 .st-key-bottomnav button > div > span {
     display: flex; flex-direction: column; align-items: center; gap: 1px;
-    flex-shrink: 0;
+    width: 100%; min-width: 0; max-width: 100%;
 }
-.st-key-bottomnav [data-testid="stIconMaterial"] { font-size: 25px; width: 25px;
-                                                   height: 25px; flex-shrink: 0; }
-.st-key-bottomnav button > div > span > span { width: 25px; height: 25px;
-                                               flex-shrink: 0; }
-.st-key-bottomnav button p { font-size: 11px; font-weight: 600; line-height: 14px;
-                             white-space: nowrap; }
+.st-key-bottomnav button > div > span > span {
+    width: 25px; height: 25px; flex: 0 0 25px; overflow: hidden;
+}
+/* Icons are drawn from inline SVG rather than the icon font: the font's
+   fallback is the icon's *name* as text, which spills out of the button. */
+.st-key-bottomnav [data-testid="stIconMaterial"] {
+    display: block; width: 25px; height: 25px; flex: 0 0 25px; overflow: hidden;
+    font-size: 0 !important; line-height: 0; color: inherit;
+    background-color: currentColor;
+    -webkit-mask: var(--nav-icon) center / 24px 24px no-repeat;
+    mask: var(--nav-icon) center / 24px 24px no-repeat;
+}
+.st-key-bottomnav button:nth-child(1) { --nav-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3M8 9h8M8 12h8M8 15h5'/%3E%3C/svg%3E"); }
+.st-key-bottomnav button:nth-child(2) { --nav-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 7h9M17 7h3M4 12h3M11 12h9M4 17h11M19 17h1'/%3E%3Ccircle cx='15' cy='7' r='2'/%3E%3Ccircle cx='9' cy='12' r='2'/%3E%3Ccircle cx='17' cy='17' r='2'/%3E%3C/svg%3E"); }
+.st-key-bottomnav button:nth-child(3) { --nav-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 15V4M8 7l4-4 4 4M8 10H6a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-8a1 1 0 0 0-1-1h-2'/%3E%3C/svg%3E"); }
+.st-key-bottomnav [data-testid="stMarkdownContainer"] { max-width: 100%; min-width: 0; }
+.st-key-bottomnav button p {
+    font-size: 11px; font-weight: 600; line-height: 14px; margin: 0;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%;
+}
 .st-key-bottomnav [data-testid="stBaseButton-segmented_controlActive"] {
     background: var(--brand-soft) !important; color: var(--brand) !important;
 }
